@@ -35,7 +35,10 @@
 #include <linux/preempt.h>
 #include <linux/spinlock.h>
 #include <linux/memblock.h>
+<<<<<<< HEAD
 #include <linux/of_fdt.h>
+=======
+>>>>>>> db2c958... memblock: s/memblock_analyze()/memblock_allow_resize()/ and update users
 
 #include <asm/tlbflush.h>
 #include <asm/tlb.h>
@@ -103,12 +106,15 @@ unsigned long linear_map_top;	/* Top of linear mapping */
 
 #endif /* CONFIG_PPC64 */
 
+<<<<<<< HEAD
 #ifdef CONFIG_PPC_FSL_BOOK3E
 /* next_tlbcam_idx is used to round-robin tlbcam entry assignment */
 DEFINE_PER_CPU(int, next_tlbcam_idx);
 EXPORT_PER_CPU_SYMBOL(next_tlbcam_idx);
 #endif
 
+=======
+>>>>>>> db2c958... memblock: s/memblock_analyze()/memblock_allow_resize()/ and update users
 /*
  * Base TLB flushing operations:
  *
@@ -273,6 +279,7 @@ EXPORT_SYMBOL(flush_tlb_page);
 
 #endif /* CONFIG_SMP */
 
+<<<<<<< HEAD
 #ifdef CONFIG_PPC_47x
 void __init early_init_mmu_47x(void)
 {
@@ -284,6 +291,8 @@ void __init early_init_mmu_47x(void)
 }
 #endif /* CONFIG_PPC_47x */
 
+=======
+>>>>>>> db2c958... memblock: s/memblock_analyze()/memblock_allow_resize()/ and update users
 /*
  * Flush kernel TLB entries in the given range
  */
@@ -461,6 +470,7 @@ static void setup_page_sizes(void)
 	}
 }
 
+<<<<<<< HEAD
 static void __patch_exception(int exc, unsigned long addr)
 {
 	extern unsigned int interrupt_base_book3e;
@@ -482,6 +492,16 @@ static void __patch_exception(int exc, unsigned long addr)
 
 static void setup_mmu_htw(void)
 {
+=======
+static void setup_mmu_htw(void)
+{
+	extern unsigned int interrupt_base_book3e;
+	extern unsigned int exc_data_tlb_miss_htw_book3e;
+	extern unsigned int exc_instruction_tlb_miss_htw_book3e;
+
+	unsigned int *ibase = &interrupt_base_book3e;
+
+>>>>>>> db2c958... memblock: s/memblock_analyze()/memblock_allow_resize()/ and update users
 	/* Check if HW tablewalk is present, and if yes, enable it by:
 	 *
 	 * - patching the TLB miss handlers to branch to the
@@ -493,12 +513,28 @@ static void setup_mmu_htw(void)
 
 	if ((tlb0cfg & TLBnCFG_IND) &&
 	    (tlb0cfg & TLBnCFG_PT)) {
+<<<<<<< HEAD
 		patch_exception(0x1c0, exc_data_tlb_miss_htw_book3e);
 		patch_exception(0x1e0, exc_instruction_tlb_miss_htw_book3e);
 		book3e_htw_enabled = 1;
 	}
 	pr_info("MMU: Book3E HW tablewalk %s\n",
 		book3e_htw_enabled ? "enabled" : "not supported");
+=======
+		/* Our exceptions vectors start with a NOP and -then- a branch
+		 * to deal with single stepping from userspace which stops on
+		 * the second instruction. Thus we need to patch the second
+		 * instruction of the exception, not the first one
+		 */
+		patch_branch(ibase + (0x1c0 / 4) + 1,
+			     (unsigned long)&exc_data_tlb_miss_htw_book3e, 0);
+		patch_branch(ibase + (0x1e0 / 4) + 1,
+			     (unsigned long)&exc_instruction_tlb_miss_htw_book3e, 0);
+		book3e_htw_enabled = 1;
+	}
+	pr_info("MMU: Book3E Page Tables %s\n",
+		book3e_htw_enabled ? "Enabled" : "Disabled");
+>>>>>>> db2c958... memblock: s/memblock_analyze()/memblock_allow_resize()/ and update users
 }
 
 /*
@@ -572,10 +608,13 @@ static void __early_init_mmu(int boot_cpu)
 
 		/* limit memory so we dont have linear faults */
 		memblock_enforce_memory_limit(linear_map_top);
+<<<<<<< HEAD
 		memblock_analyze();
 
 		patch_exception(0x1c0, exc_data_tlb_miss_bolted_book3e);
 		patch_exception(0x1e0, exc_instruction_tlb_miss_bolted_book3e);
+=======
+>>>>>>> db2c958... memblock: s/memblock_analyze()/memblock_allow_resize()/ and update users
 	}
 #endif
 
@@ -611,6 +650,7 @@ void setup_initial_memory_limit(phys_addr_t first_memblock_base,
 	/* Finally limit subsequent allocations */
 	memblock_set_current_limit(first_memblock_base + ppc64_rma_size);
 }
+<<<<<<< HEAD
 #else /* ! CONFIG_PPC64 */
 void __init early_init_mmu(void)
 {
@@ -618,4 +658,6 @@ void __init early_init_mmu(void)
 	early_init_mmu_47x();
 #endif
 }
+=======
+>>>>>>> db2c958... memblock: s/memblock_analyze()/memblock_allow_resize()/ and update users
 #endif /* CONFIG_PPC64 */

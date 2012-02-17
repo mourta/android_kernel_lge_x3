@@ -107,9 +107,12 @@ void __init reserve_crashkernel(void)
 	unsigned long long crash_size, crash_base;
 	int ret;
 
+<<<<<<< HEAD
 	/* this is necessary because of memblock_phys_mem_size() */
 	memblock_analyze();
 
+=======
+>>>>>>> db2c958... memblock: s/memblock_analyze()/memblock_allow_resize()/ and update users
 	/* use common parsing */
 	ret = parse_crashkernel(boot_command_line, memblock_phys_mem_size(),
 			&crash_size, &crash_base);
@@ -126,7 +129,11 @@ void __init reserve_crashkernel(void)
 	/* We might have got these values via the command line or the
 	 * device tree, either way sanitise them now. */
 
+<<<<<<< HEAD
 	crash_size = resource_size(&crashk_res);
+=======
+	crash_size = crashk_res.end - crashk_res.start + 1;
+>>>>>>> db2c958... memblock: s/memblock_analyze()/memblock_allow_resize()/ and update users
 
 #ifndef CONFIG_RELOCATABLE
 	if (crashk_res.start != KDUMP_KERNELBASE)
@@ -136,6 +143,7 @@ void __init reserve_crashkernel(void)
 	crashk_res.start = KDUMP_KERNELBASE;
 #else
 	if (!crashk_res.start) {
+<<<<<<< HEAD
 #ifdef CONFIG_PPC64
 		/*
 		 * On 64bit we split the RMO in half but cap it at half of
@@ -146,6 +154,14 @@ void __init reserve_crashkernel(void)
 #else
 		crashk_res.start = KDUMP_KERNELBASE;
 #endif
+=======
+		/*
+		 * unspecified address, choose a region of specified size
+		 * can overlap with initrd (ignoring corruption when retained)
+		 * ppc64 requires kernel and some stacks to be in first segemnt
+		 */
+		crashk_res.start = KDUMP_KERNELBASE;
+>>>>>>> db2c958... memblock: s/memblock_analyze()/memblock_allow_resize()/ and update users
 	}
 
 	crash_base = PAGE_ALIGN(crashk_res.start);
@@ -226,7 +242,11 @@ static void __init export_crashk_values(struct device_node *node)
 
 	if (crashk_res.start != 0) {
 		prom_add_property(node, &crashk_base_prop);
+<<<<<<< HEAD
 		crashk_size = resource_size(&crashk_res);
+=======
+		crashk_size = crashk_res.end - crashk_res.start + 1;
+>>>>>>> db2c958... memblock: s/memblock_analyze()/memblock_allow_resize()/ and update users
 		prom_add_property(node, &crashk_size_prop);
 	}
 }

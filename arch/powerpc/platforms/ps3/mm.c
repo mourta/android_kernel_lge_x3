@@ -319,7 +319,10 @@ static int __init ps3_mm_add_memory(void)
 	}
 
 	memblock_add(start_addr, map.r1.size);
+<<<<<<< HEAD
 	memblock_analyze();
+=======
+>>>>>>> db2c958... memblock: s/memblock_analyze()/memblock_allow_resize()/ and update users
 
 	result = online_pages(start_pfn, nr_pages);
 

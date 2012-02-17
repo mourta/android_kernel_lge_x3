@@ -69,7 +69,10 @@ unsigned long tce_alloc_start, tce_alloc_end;
 u64 ppc64_rma_size;
 #endif
 static phys_addr_t first_memblock_size;
+<<<<<<< HEAD
 static int __initdata boot_cpu_count;
+=======
+>>>>>>> d46fb37... memblock: Kill memblock_init()
 
 static int __init early_parse_mem(char *p)
 {
@@ -719,8 +722,11 @@ void __init early_init_devtree(void *params)
 	of_scan_flat_dt(early_init_dt_scan_chosen_ppc, cmd_line);
 
 	/* Scan memory nodes and rebuild MEMBLOCKs */
+<<<<<<< HEAD
 	memblock_init();
 
+=======
+>>>>>>> d46fb37... memblock: Kill memblock_init()
 	of_scan_flat_dt(early_init_dt_scan_root, NULL);
 	of_scan_flat_dt(early_init_dt_scan_memory_ppc, NULL);
 	setup_initial_memory_limit(memstart_addr, first_memblock_size);
@@ -770,6 +776,7 @@ void __init early_init_devtree(void *params)
 	 */
 	of_scan_flat_dt(early_init_dt_scan_cpus, NULL);
 
+<<<<<<< HEAD
 #if defined(CONFIG_SMP) && defined(CONFIG_PPC64)
 	/* We'll later wait for secondaries to check in; there are
 	 * NCPUS-1 non-boot CPUs  :-)
@@ -777,6 +784,8 @@ void __init early_init_devtree(void *params)
 	spinning_secondaries = boot_cpu_count - 1;
 #endif
 
+=======
+>>>>>>> d46fb37... memblock: Kill memblock_init()
 	DBG(" <- early_init_devtree()\n");
 }
 
@@ -870,6 +879,7 @@ static int prom_reconfig_notifier(struct notifier_block *nb,
 	switch (action) {
 	case PSERIES_RECONFIG_ADD:
 		err = of_finish_dynamic_node(node);
+<<<<<<< HEAD
 		if (err < 0)
 			printk(KERN_ERR "finish_node returned %d\n", err);
 		break;
@@ -878,6 +888,18 @@ static int prom_reconfig_notifier(struct notifier_block *nb,
 		break;
 	}
 	return notifier_from_errno(err);
+=======
+		if (err < 0) {
+			printk(KERN_ERR "finish_node returned %d\n", err);
+			err = NOTIFY_BAD;
+		}
+		break;
+	default:
+		err = NOTIFY_DONE;
+		break;
+	}
+	return err;
+>>>>>>> d46fb37... memblock: Kill memblock_init()
 }
 
 static struct notifier_block prom_reconfig_nb = {

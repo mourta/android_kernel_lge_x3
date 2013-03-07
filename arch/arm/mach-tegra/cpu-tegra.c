@@ -44,6 +44,7 @@
 #include "dvfs.h"
 
 #include "pm.h"
+#include "tegra_pmqos.h"
 
 #include <linux/seq_file.h>
 
@@ -786,6 +787,8 @@ int tegra_update_cpu_speed(unsigned long rate)
 	int ret = 0;
 	struct cpufreq_freqs freqs;
 
+	unsigned long rate_save = rate;
+	int orig_nice = 0;
 	freqs.old = tegra_getspeed(0);
 	freqs.new = rate;
 
@@ -795,6 +798,32 @@ int tegra_update_cpu_speed(unsigned long rate)
 
 	if (freqs.old == freqs.new)
 		return ret;
+
+	//	This is For Smartmax Gov //
+	if (rate_save > T3_LP_MAX_FREQ) {
+		if (is_lp_cluster()) {
+			orig_nice = task_nice(current);
+
+	if(can_nice(current, -20)) {
+		set_user_nice(current, -20);
+	} else {
+		pr_err("[cpufreq] can not nice(-20)!!");
+	}
+
+	CPU_DEBUG_PRINTK(CPU_DEBUG_HOTPLUG,
+			" leave LPCPU (%s)", __func__);
+
+	/* set rate to max of LP mode */
+	ret = clk_set_rate(cpu_clk, 475000 * 1000);
+	/* change to g mode */
+	clk_set_parent(cpu_clk, cpu_g_clk);
+	/* restore the target frequency, and
+	* let the rest of the function handle
+	* the frequency scale up
+	*/
+	freqs.new = rate_save;
+		}
+	}
 
 	/*
 	 * Vote on memory bus frequency based on cpu frequency
@@ -836,6 +865,16 @@ int tegra_update_cpu_speed(unsigned long rate)
 	if (freqs.old > freqs.new) {
 		clk_set_rate(emc_clk, tegra_emc_to_cpu_ratio(freqs.new));
 		tegra_update_mselect_rate(freqs.new);
+	}
+
+error:
+	if (orig_nice != task_nice(current)) {
+		if (can_nice(current, orig_nice)) {
+			set_user_nice(current, orig_nice);
+		} else {
+				pr_err("[cpufreq] can not restore nice(%d)!!",
+								orig_nice);
+		}
 	}
 
 	return 0;

@@ -460,6 +460,7 @@ static int online_pages_range(unsigned long start_pfn, unsigned long nr_pages,
 
 int __ref online_pages(unsigned long pfn, unsigned long nr_pages)
 {
+	unsigned long flags;
 	unsigned long onlined_pages = 0;
 	struct zone *zone;
 	int need_zonelists_rebuild = 0;
@@ -510,11 +511,18 @@ int __ref online_pages(unsigned long pfn, unsigned long nr_pages)
 	}
 
 	zone->present_pages += onlined_pages;
+
+	pgdat_resize_lock(zone->zone_pgdat, &flags);
 	zone->zone_pgdat->node_present_pages += onlined_pages;
-	if (need_zonelists_rebuild)
-		build_all_zonelists(zone);
-	else
-		zone_pcp_update(zone);
+	pgdat_resize_unlock(zone->zone_pgdat, &flags);
+
+	if (onlined_pages) {
+		node_set_state(zone_to_nid(zone), N_HIGH_MEMORY);
+		if (need_zonelists_rebuild)
+			build_all_zonelists(zone);
+		else
+			zone_pcp_update(zone);
+	}
 
 	mutex_unlock(&zonelists_mutex);
 

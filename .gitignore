@@ -32,6 +32,9 @@ modules.builtin
 *.lzo
 *.patch
 *.gcno
+*.sh
+*.xzkern
+ashldi3.S
 
 #
 # Top-level generic files

@@ -130,7 +130,7 @@ static void early_suspend(struct work_struct *work)
 	else
 	{		
 		cpufreq_set_max_freq(NULL, LONG_MAX);
-		tegra_auto_hotplug_set_max_cpus(0);
+//		tegra_auto_hotplug_set_max_cpus(0);			// must be disabled when using cpuquiet
 	}
 #endif
 	}

@@ -125,7 +125,7 @@ static void early_suspend(struct work_struct *work)
 #ifdef LGE_RESTRICT_POWER_DURING_SLEEP
 	if(charging_mode == CHARGING_NONE){
 		cpufreq_set_max_freq(NULL, RESTRICTED_CLOCK);
-		tegra_auto_hotplug_set_max_cpus(RESTRICTED_CORE);
+//    tegra_auto_hotplug_set_max_cpus(RESTRICTED_CORE);  // must be disabled when using cpuquiet
 	}
 	else
 	{		

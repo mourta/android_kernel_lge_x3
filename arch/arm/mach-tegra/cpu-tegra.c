@@ -43,10 +43,21 @@
 #include "cpu-tegra.h"
 #include "dvfs.h"
 
+#include "pm.h"
+
+#include <linux/seq_file.h>
+
+#define SYSTEM_NORMAL_MODE        (0)
+#define SYSTEM_BALANCE_MODE        (1)
+#define SYSTEM_PWRSAVE_MODE        (2)
+#define SYSTEM_MODE_END                 (SYSTEM_PWRSAVE_MODE + 1)
+#define SYSTEM_PWRSAVE_MODE_MAX_FREQ        (1000000)
+unsigned int power_mode_table[SYSTEM_MODE_END] = {1000000,1200000,1400000};
+
 /* tegra throttling and edp governors require frequencies in the table
    to be in ascending order */
 static struct cpufreq_frequency_table *freq_table;
-
+static unsigned int freq_table_size=0;;
 static struct clk *cpu_clk;
 static struct clk *emc_clk;
 static struct clk *cpu_lp_clk;
@@ -420,31 +431,12 @@ static struct kernel_param_ops cap_ops = {
 };
 module_param_cb(cpu_user_cap, &cap_ops, &cpu_user_cap, 0644);
 
-static unsigned int user_cap_speed(unsigned int requested_speed)
+/*static unsigned int user_cap_speed(unsigned int requested_speed)
 {
-//                    
-#ifdef CONFIG_MACH_X3
-#ifdef LOAD_SHAPER_BY_VOTE_MAX_FREQ 
-	if((vmf_for_load_shaper) && requested_speed > vmf_for_load_shaper)
-		requested_speed = vmf_for_load_shaper;
-	
-	if((vmf_for_record) && requested_speed > vmf_for_record)
-			requested_speed = vmf_for_record;
-
-	if((vmf_for_camera) && requested_speed > vmf_for_camera)
-			requested_speed = vmf_for_camera;
-	
-	if((vmf_for_player) && requested_speed > vmf_for_player)
-			requested_speed = vmf_for_player;
-
-	if((vmf_for_network) && requested_speed > vmf_for_network)
-			requested_speed = vmf_for_network;
-#endif
-#endif /* CONFIG_MACH_X3 */
-	if ((cpu_user_cap) && (requested_speed > cpu_user_cap))
-		return cpu_user_cap;
-	return requested_speed;
-}
+        if ((cpu_user_cap) && (requested_speed > cpu_user_cap))
+                return cpu_user_cap;
+        return requested_speed;
+}*/
 
 #ifdef CONFIG_TEGRA_THERMAL_THROTTLE
 
@@ -944,7 +936,6 @@ int tegra_cpu_set_speed_cap(unsigned int *speed_cap)
 	if (is_suspended)
 		return -EBUSY;
 
-	new_speed = LGE_governor_speed(new_speed);
 	new_speed = tegra_throttle_governor_speed(new_speed);
 	new_speed = edp_governor_speed(new_speed);
 	//new_speed = user_cap_speed(new_speed);
@@ -990,7 +981,6 @@ int tegra_cpu_late_resume_set_speed_cap(int speed)
                return -EBUSY;
        }
 
-       new_speed = LGE_governor_speed(new_speed);
        new_speed = tegra_throttle_governor_speed(new_speed);
        new_speed = edp_governor_speed(new_speed);
 
@@ -1118,6 +1108,13 @@ static int tegra_pm_notify(struct notifier_block *nb, unsigned long event,
 static struct notifier_block tegra_cpu_pm_notifier = {
 	.notifier_call = tegra_pm_notify,
 };
+
+void rebuild_max_freq_table(unsigned int max_rate)
+{
+        power_mode_table[SYSTEM_NORMAL_MODE] = max_rate;
+        power_mode_table[SYSTEM_BALANCE_MODE] = max_rate - 200000;
+        power_mode_table[SYSTEM_PWRSAVE_MODE] = SYSTEM_PWRSAVE_MODE_MAX_FREQ;
+}
 
 static int tegra_cpu_init(struct cpufreq_policy *policy)
 {

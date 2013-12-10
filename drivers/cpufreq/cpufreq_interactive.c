@@ -769,8 +769,11 @@ static int cpufreq_interactive_up_task(void *data)
 			pcpu = &per_cpu(cpuinfo, cpu);
 			smp_rmb();
 
-			if (!pcpu->governor_enabled)
+			mutex_lock(&gov_state_lock);
+			if (!pcpu->governor_enabled) {
+				mutex_unlock(&gov_state_lock);
 				continue;
+			}
 
 			mutex_lock(&set_speed_lock);
 
@@ -786,7 +789,7 @@ static int cpufreq_interactive_up_task(void *data)
 						max_freq,
 						CPUFREQ_RELATION_H);
 			mutex_unlock(&set_speed_lock);
-
+			mutex_unlock(&gov_state_lock);
 			pcpu->freq_change_time_in_idle =
 				get_cpu_idle_time_us(cpu,
 						     &pcpu->freq_change_time);
@@ -817,8 +820,11 @@ static void cpufreq_interactive_freq_down(struct work_struct *work)
 		pcpu = &per_cpu(cpuinfo, cpu);
 		smp_rmb();
 
-		if (!pcpu->governor_enabled)
-			continue;
+		mutex_lock(&gov_state_lock);
+		if (!pcpu->governor_enabled) {
+				mutex_unlock(&gov_state_lock);
+				continue;
+			}
 
 		mutex_lock(&set_speed_lock);
 
@@ -834,6 +840,7 @@ static void cpufreq_interactive_freq_down(struct work_struct *work)
 					CPUFREQ_RELATION_H);
 
 		mutex_unlock(&set_speed_lock);
+		mutex_unlock(&gov_state_lock);
 		pcpu->freq_change_time_in_idle =
 			get_cpu_idle_time_us(cpu,
 					     &pcpu->freq_change_time);
@@ -1014,6 +1021,7 @@ static int cpufreq_governor_interactive(struct cpufreq_policy *policy,
 		freq_table =
 			cpufreq_frequency_get_table(policy->cpu);
 
+					mutex_lock(&gov_state_lock);
 		for_each_cpu(j, policy->cpus) {
 			pcpu = &per_cpu(cpuinfo, j);
 			pcpu->policy = policy;
@@ -1042,7 +1050,6 @@ static int cpufreq_governor_interactive(struct cpufreq_policy *policy,
 				mod_timer(&pcpu->cpu_timer, jiffies + 2);
 		}
 
-		mutex_lock(&gov_state_lock);
 		active_count++;
 		/*
 		 * Do not register the idle hook and create sysfs
@@ -1068,6 +1075,7 @@ static int cpufreq_governor_interactive(struct cpufreq_policy *policy,
 		break;
 
 	case CPUFREQ_GOV_STOP:
+			mutex_lock(&gov_state_lock);
 		for_each_cpu(j, policy->cpus) {
 			pcpu = &per_cpu(cpuinfo, j);
 			pcpu->governor_enabled = 0;
@@ -1083,6 +1091,7 @@ static int cpufreq_governor_interactive(struct cpufreq_policy *policy,
 			pcpu->idle_exit_time = 0;
 		}
 
+		mutex_unlock(&gov_state_lock);
 		flush_work(&freq_scale_down_work);
 		mutex_lock(&gov_state_lock);
 

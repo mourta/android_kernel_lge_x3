@@ -47,7 +47,7 @@ MODULE_LICENSE("GPL");
 unsigned long modem_ver = XMM_MODEM_VER_1145; //XMM_MODEM_VER_1121;
 EXPORT_SYMBOL(modem_ver);
 
-unsigned long modem_flash=1;
+unsigned long modem_flash = 1;
 EXPORT_SYMBOL(modem_flash);
 
 unsigned long modem_pm = 1;
@@ -151,8 +151,10 @@ static int baseband_xmm_power_driver_handle_resume(struct baseband_power_platfor
 
 #define PR_TRACE(msg)
 
-// Just disable the wake lock for now
+// Just disable wakelocks for now
 #define wake_lock(x)
+#define wake_unlock(x)
+#define wake_lock_active(x) false
 
 static inline void baseband_xmm_power_msleep(u32 t)
 {

@@ -413,7 +413,6 @@ static struct tegra_dc_out_pin ssd2825_dc_out_pins[] = {
 	},
 };
 
-#if 0
 static struct tegra_dc_sd_settings x3_sd_settings = {
 	.enable = 1, /* Normal mode operation */
 	.use_auto_pwm = true,
@@ -505,7 +504,6 @@ static struct tegra_dc_sd_settings x3_sd_settings = {
 	.sd_brightness = &sd_brightness,
 	.bl_device = &x3_backlight_device,
 };
-#endif
 
 static struct tegra_fb_data x3_fb_data = {
     .win        = 0,
@@ -586,13 +584,13 @@ int ssd2825_bridge_enable_queue(void)
 static struct tegra_dc_out x3_disp1_out = {
 	.align		= TEGRA_DC_ALIGN_MSB,
 	.order		= TEGRA_DC_ORDER_RED_BLUE,
-//                                                                       
-	.height 		= 105,//                                              
-	.width		= 59,//                                              
+
+	.height 	= 105,
+	.width		= 59,
 
 	.type		= TEGRA_DC_OUT_RGB,
-	.parent_clk 	= "pll_p",//"pll_d_out0",
-	//.depth		= 24,
+	.parent_clk 	= "pll_p", //"pll_d_out0",
+	//.depth	= 24,
 
 	.modes	 	= x3_panel_modes,
 	.n_modes 	= ARRAY_SIZE(x3_panel_modes),
@@ -605,6 +603,9 @@ static struct tegra_dc_out x3_disp1_out = {
 	.postsuspend	= x3_panel_postsuspend,
 	.prepoweron	= ssd2825_bridge_enable_queue,
 	.postpoweron	= x3_postpoweron,
+
+	/* SmartDimmer */
+	.sd_settings    = &x3_sd_settings,
 };
 
 static struct tegra_dc_platform_data x3_disp1_pdata = {

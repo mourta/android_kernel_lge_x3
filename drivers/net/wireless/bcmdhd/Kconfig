@@ -1,6 +1,6 @@
 config BCM4330
 	tristate "Broadcom 4330 wireless cards support"
-	depends on WLAN
+	depends on BCMDHD
 	---help---
 	  This module adds support for wireless adapters based on
 	  Broadcom 4330 chipset.
@@ -28,20 +28,20 @@ config BCM43241
 
 config BROADCOM_WIFI
 	bool "Broadcom WiFi Driver"
-	depends on (BCM4330 || BCM4334 || BCM43241)
+	depends on (BCMDHD || BCM4334 || BCM43241)
 	default y
 	---help---
 		This is a configuration for broadcom WLAN driver.
 
 config BCMDHD_FW_PATH
-	depends on WLAN
+	depends on BCMDHD
 	string "Firmware path"
 	default "/system/etc/firmware/fw_bcmdhd.bin"
 	---help---
 	  Path to the firmware file.
 
 config BCMDHD_NVRAM_PATH
-	depends on WLAN
+	depends on BCMDHD
 	string "NVRAM path"
 	default "/system/etc/wifi/bcmdhd.cal"
 	---help---
@@ -54,6 +54,13 @@ config BCMDHD_WEXT
 	select WEXT_PRIV
 	help
 	  Enables WEXT support
+
+config BCMDHD_CONFIG_PATH
+    depends on BCMDHD
+    string "Config path"
+    default "/data/misc/wifi/config"
+    ---help---
+    Path to the config file.
 
 config DHD_USE_STATIC_BUF
 	bool "Enable memory preallocation"
@@ -71,7 +78,7 @@ config DHD_USE_SCHED_SCAN
 
 config BROADCOM_WIFI_RESERVED_MEM
 	bool "BROADCOM Reserved memory for wifi device"
-	depends on (BCM4330 || BCM4334 || BCM4335 || BCM43241)
+	depends on (BCMDHD || BCM4334 || BCM4335 || BCM43241)
 	---help---
 	  This is a configuration for broadcom WLAN driver.
 
@@ -84,7 +91,7 @@ config BCM4335BT
 
 config WLAN_REGION_CODE
 	int "---Region codes for Broadcom WiFi Driver"
-	depends on (BCM4330 || BCM4334 || BCM4335 || BCM43241)
+	depends on (BCMDHD || BCM4334 || BCM4335 || BCM43241)
 	default 100
 	---help---
 		This is a region code for Broadcom Wi-Fi featured functions.

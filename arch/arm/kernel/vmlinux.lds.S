@@ -22,6 +22,7 @@
  */
 
 #include <asm-generic/vmlinux.lds.h>
+#include <asm/cache.h>
 #include <asm/thread_info.h>
 #include <asm/memory.h>
 #include <asm/page.h>
@@ -59,6 +60,57 @@ jiffies = jiffies_64 + 4;
 
 SECTIONS
 {
+#ifdef CONFIG_XIP_KERNEL
+	. = XIP_VIRT_ADDR(CONFIG_XIP_PHYS_ADDR);
+#else
+	. = PAGE_OFFSET + TEXT_OFFSET;
+#endif
+
+	.init : {			/* Init code and data		*/
+		_stext = .;
+		_sinittext = .;
+			HEAD_TEXT
+			INIT_TEXT
+			ARM_EXIT_KEEP(EXIT_TEXT)
+		_einittext = .;
+		ARM_CPU_DISCARD(PROC_INFO)
+		__arch_info_begin = .;
+			*(.arch.info.init)
+		__arch_info_end = .;
+		__tagtable_begin = .;
+			*(.taglist.init)
+		__tagtable_end = .;
+#ifdef CONFIG_SMP_ON_UP
+		__smpalt_begin = .;
+			*(.alt.smp.init)
+		__smpalt_end = .;
+#endif
+
+		__pv_table_begin = .;
+			*(.pv_table)
+		__pv_table_end = .;
+
+		INIT_SETUP(16)
+
+		INIT_CALLS
+		CON_INITCALL
+		SECURITY_INITCALL
+		INIT_RAM_FS
+
+#ifndef CONFIG_XIP_KERNEL
+		__init_begin = _stext;
+		INIT_DATA
+		ARM_EXIT_KEEP(EXIT_DATA)
+#endif
+	}
+
+	PERCPU_SECTION(L1_CACHE_BYTES)
+
+#ifndef CONFIG_XIP_KERNEL
+	. = ALIGN(PAGE_SIZE);
+	__init_end = .;
+#endif
+
 	/*
 	 * XXX: The linker does not define how output sections are
 	 * assigned to input sections when there are multiple statements
@@ -223,13 +275,13 @@ SECTIONS
 #endif
 
 		NOSAVE_DATA
-		CACHELINE_ALIGNED_DATA(32)
-		READ_MOSTLY_DATA(32)
+		CACHELINE_ALIGNED_DATA(L1_CACHE_BYTES)
+		READ_MOSTLY_DATA(L1_CACHE_BYTES)
 
 		/*
 		 * The exception fixup table (might need resorting at runtime)
 		 */
-		. = ALIGN(32);
+		. = ALIGN(4);
 		__start___ex_table = .;
 #ifdef CONFIG_MMU
 		*(__ex_table)

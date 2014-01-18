@@ -68,7 +68,7 @@ module_param(idle_bottom_freq, uint, 0644);
 static int mp_overhead = 10;
 module_param(mp_overhead, int, 0644);
 
-static int balance_level = 60;
+static int balance_level = 70;
 
 module_param(balance_level, int, 0644);
 
@@ -203,7 +203,7 @@ static unsigned int rt_profile_sel;
 static unsigned int rt_profile_default[] = {
 /*      1,  2,  3,  4 - on-line cpus target */
 /*                                                                              */
-	5,  9, 10, UINT_MAX
+	8,  9, 10, UINT_MAX
 };
 
 static unsigned int rt_profile_1[] = {

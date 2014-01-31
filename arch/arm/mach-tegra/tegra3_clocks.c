@@ -5034,7 +5034,7 @@ unsigned long tegra_emc_to_cpu_ratio(unsigned long cpu_rate)
 		return 0;		/* emc min */
 #endif /* !defined(CONFIG_MACH_X3) */
 //            
-}
+	}
 
 int tegra_update_mselect_rate(unsigned long cpu_rate)
 {

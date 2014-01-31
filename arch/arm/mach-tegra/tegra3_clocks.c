@@ -2885,10 +2885,25 @@ static long tegra3_clk_cbus_round_rate(struct clk *c, unsigned long rate)
 	if (!c->dvfs)
 		return rate;
 
-//                    
+//
+#ifdef CONFIG_MACH_X3
 	/* update min now, since no dvfs table was available during init */
 	if (!c->min_rate)
-		c->min_rate = c->dvfs->freqs[0];
+			c->min_rate = c->dvfs->freqs[0];
+#else
+    /* update min now, since no dvfs table was available during init
+       (skip placeholder entries set to 1 kHz) */
+	if (!c->min_rate) {
+			for (i = 0; i < (c->dvfs->num_freqs - 1); i++) {
+			if (c->dvfs->freqs[i] > 1 * c->dvfs->freqs_mult) {
+				c->min_rate = c->dvfs->freqs[i];
+				break;
+			}
+		}
+		BUG_ON(!c->min_rate);
+	}
+	rate = max(rate, c->min_rate);
+#endif
 	for (i = 0; i < (c->dvfs->num_freqs - 1); i++) {
 		unsigned long f = c->dvfs->freqs[i];
 		if (f >= rate)
@@ -4943,7 +4958,8 @@ unsigned long tegra_emc_to_cpu_ratio(unsigned long cpu_rate)
 
 	/* Vote on memory bus frequency based on cpu frequency;
 	   cpu rate is in kHz, emc rate is in Hz */
-//                
+//
+#if !defined(CONFIG_MACH_X3) &&  !defined(CONFIG_MACH_LX) && !defined(CONFIG_MACH_VU10)
 	if (cpu_rate >= 925000)
 		return emc_max_rate;	/* cpu >= 925 MHz, emc max */
 	else if (cpu_rate >= 450000)
@@ -4952,8 +4968,26 @@ unsigned long tegra_emc_to_cpu_ratio(unsigned long cpu_rate)
 		return 100000000;	/* cpu >= 250 MHz, emc 100 MHz */
 	else
 		return 0;		/* emc min */
+#else
+//                                
+//	if (cpu_rate >= 925000)
+	if (cpu_rate >= 750000)
+		return emc_max_rate;	/* cpu >= 925 MHz, emc max */
+	else if (cpu_rate >= 550000)
+		return emc_max_rate/2;	/* cpu >= 550 MHz, emc max/2 */
+	else if (cpu_rate >= 400000)
+		return 200000000;	/* cpu >= 400 MHz, emc 200 MHz */
+	else if (cpu_rate >= 300000)
+		return 100000000;	/* cpu >= 300 MHz, emc 100 MHz */
+	else if (cpu_rate >= 200000)
+		return 50000000;	/* cpu >= 200 MHz, emc 50 MHz */
+	else if (cpu_rate >= 100000)
+		return 25000000;	/* cpu >= 100 MHz, emc 25 MHz */
+	else
+		return 0;		/* emc min */
+#endif /* !defined(CONFIG_MACH_X3) */
 //            
-}
+	}
 
 int tegra_update_mselect_rate(unsigned long cpu_rate)
 {
@@ -5211,7 +5245,8 @@ static void tegra_clk_resume(void)
 #define tegra_clk_resume NULL
 #endif
 
-//                    
+//
+#ifdef CONFIG_MACH_X3
 #ifdef CONFIG_HAS_EARLYSUSPEND
 
 static struct early_suspend tegra3_clk_early_suspender;
@@ -5247,6 +5282,7 @@ static void tegra3_clk_late_resume(struct early_suspend *h)
 }
 #endif
 
+#endif /* CONFIG_MACH_X3 */
 
 static struct syscore_ops tegra_clk_syscore_ops = {
 	.suspend = tegra_clk_suspend,
@@ -5545,10 +5581,12 @@ void __init tegra_soc_init_clocks(void)
 	tegra_init_cpu_edp_limits(0);
 
 	register_syscore_ops(&tegra_clk_syscore_ops);
-//                    
+//
+#ifdef CONFIG_MACH_X3    
 #ifdef CONFIG_HAS_EARLYSUSPEND
 	tegra3_clk_early_suspender.suspend = tegra3_clk_early_suspend;
 	tegra3_clk_early_suspender.resume = tegra3_clk_late_resume;
 	register_early_suspend(&tegra3_clk_early_suspender);
 #endif
+#endif /* CONFIG_MACH_X3 */
 }

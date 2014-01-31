@@ -416,8 +416,11 @@ int nvmap_ioctl_rw_handle(struct file *filp, int is_read, void __user* arg)
 		return -EINVAL;
 
 	h = nvmap_get_handle_id(client, op.handle);
-	if (!h)
+	if (!h) {
+		nvmap_err(client, "%s, %s : handle %08lx\n",
+			current->group_leader->comm, __func__, op.handle);
 		return -EPERM;
+	}
 
 	nvmap_usecount_inc(h);
 

@@ -57,7 +57,7 @@
  */
 static int dmp_stop(struct mldl_cfg *mldl_cfg, void *gyro_handle)
 {
-	unsigned char user_ctrl_reg = 0x00; //                                          
+	unsigned char user_ctrl_reg;
 	int result;
 
 	if (mldl_cfg->inv_mpu_state->status & MPU_DMP_IS_SUSPENDED)
@@ -91,7 +91,7 @@ static int dmp_stop(struct mldl_cfg *mldl_cfg, void *gyro_handle)
  */
 static int dmp_start(struct mldl_cfg *mldl_cfg, void *mlsl_handle)
 {
-	unsigned char user_ctrl_reg = 0x00; //                                          
+	unsigned char user_ctrl_reg;
 	int result;
 
 	if ((!(mldl_cfg->inv_mpu_state->status & MPU_DMP_IS_SUSPENDED) &&
@@ -325,10 +325,10 @@ static struct prod_rev_map_t prod_rev_map[] = {
 	{MPL_PROD_KEY(7, 19), MPU_SILICON_REV_B1, 131, 16384},	/* (B5/E2)   */
 	/* prod_ver = 8 */
 	{MPL_PROD_KEY(8, 19), MPU_SILICON_REV_B1, 131, 16384},	/* (B5/E2)   */
-        {MPL_PROD_KEY(9, 19), MPU_SILICON_REV_B1, 131, 16384},	/* (B5/E2)   */
-	{MPL_PROD_KEY(40, 19), MPU_SILICON_REV_B1, 131, 16384},	/* (B5/E2)   */
-	{MPL_PROD_KEY(41, 19), MPU_SILICON_REV_B1, 131, 16384},	/* (B5/E2)   */
-	{MPL_PROD_KEY(42, 19), MPU_SILICON_REV_B1, 131, 16384}	/* (B5/E2)   */		
+	/* prod_ver = 9 */
+	{MPL_PROD_KEY(9, 19), MPU_SILICON_REV_B1, 131, 16384},	/* (B5/E2)   */
+	/* prod_ver = 10 */
+	{MPL_PROD_KEY(10, 19), MPU_SILICON_REV_B1, 131, 16384}	/* (B5/E2)   */
 };
 
 /**
@@ -384,6 +384,7 @@ static int inv_get_silicon_rev_mpu6050(
 		LOG_RESULT_LOCATION(result);
 		return result;
 	}
+	prod_ver &= 0xF;
 
 	result = inv_serial_read_mem(mlsl_handle, mldl_cfg->mpu_chip_info->addr,
 				     memAddr, 1, &prod_rev);
@@ -409,16 +410,23 @@ static int inv_get_silicon_rev_mpu6050(
 			 "incompatible or an MPU3050\n");
 		return INV_ERROR_INVALID_MODULE;
 	}
+	index = index_of_key(key);
+	if (index == -1 || index >= NUM_OF_PROD_REVS) {
+		MPL_LOGE("Unsupported product key %d in MPL\n", key);
+		return INV_ERROR_INVALID_MODULE;
+	}
+	/* check MPL is compiled for this device */
+	if (prod_rev_map[index].silicon_rev != MPU_SILICON_REV_B1) {
+		MPL_LOGE("MPL compiled for MPU6050B1 support "
+			 "but device is not MPU6050B1 (%d)\n", key);
+		return INV_ERROR_INVALID_MODULE;
+	}
 
-    mpu_chip_info->product_id = prod_ver;
-    mpu_chip_info->product_revision = prod_rev;
-    mpu_chip_info->silicon_revision = MPU_SILICON_REV_B1;
-    mpu_chip_info->gyro_sens_trim = 131;
-    mpu_chip_info->accel_sens_trim = 16384;
-
-    if (prod_ver == 4) {
-        mpu_chip_info->accel_sens_trim = 8192;
-    }	
+	mpu_chip_info->product_id = prod_ver;
+	mpu_chip_info->product_revision = prod_rev;
+	mpu_chip_info->silicon_revision = prod_rev_map[index].silicon_rev;
+	mpu_chip_info->gyro_sens_trim = prod_rev_map[index].gyro_trim;
+	mpu_chip_info->accel_sens_trim = prod_rev_map[index].accel_trim;
 
 	return result;
 }
@@ -452,7 +460,7 @@ static int inv_mpu_set_level_shifter_bit(struct mldl_cfg *mldl_cfg,
 				  void *mlsl_handle, unsigned char enable)
 {
 	int result;
-	unsigned char regval = 0x00; //                                           
+	unsigned char regval;
 
 	result = inv_serial_read(mlsl_handle, mldl_cfg->mpu_chip_info->addr,
 				 MPUREG_YG_OFFS_TC, 1, &regval);
@@ -494,7 +502,7 @@ static int mpu60xx_pwr_mgmt(struct mldl_cfg *mldl_cfg,
 				    unsigned int reset, unsigned long sensors)
 {
 	unsigned char pwr_mgmt[2];
-	unsigned char pwr_mgmt_prev[2] = { 0x00, }; //                                          
+	unsigned char pwr_mgmt_prev[2];
 	int result;
 	int sleep = !(sensors & (INV_THREE_AXIS_GYRO | INV_THREE_AXIS_ACCEL
 				| INV_DMP_PROCESSOR));
@@ -509,7 +517,7 @@ static int mpu60xx_pwr_mgmt(struct mldl_cfg *mldl_cfg,
 			return result;
 		}
 		mldl_cfg->inv_mpu_state->status &= ~MPU_GYRO_IS_BYPASSED;
-		msleep(100);
+		msleep(15);
 	}
 
 	/* NOTE : reading both PWR_MGMT_1 and PWR_MGMT_2 for efficiency because
@@ -582,7 +590,7 @@ static int mpu_set_clock_source(void *gyro_handle, struct mldl_cfg *mldl_cfg)
 {
 	int result;
 	unsigned char cur_clk_src;
-	unsigned char reg = 0x00;  //                                          
+	unsigned char reg;
 
 	/* clock source selection */
 	result = inv_serial_read(gyro_handle, mldl_cfg->mpu_chip_info->addr,
@@ -679,7 +687,7 @@ static int mpu_set_slave_mpu60xx(struct mldl_cfg *mldl_cfg,
 	unsigned char bits_slave_delay = 0;
 	/* Divide down rate for the Slave, from the mpu rate */
 	unsigned char d0_trig_reg;
-	unsigned char delay_ctrl_orig = 0; //                                          
+	unsigned char delay_ctrl_orig;
 	unsigned char delay_ctrl;
 	long divider;
 
@@ -936,7 +944,7 @@ static int mpu_set_slave(struct mldl_cfg *mldl_cfg,
 static int mpu_was_reset(struct mldl_cfg *mldl_cfg, void *gyro_handle)
 {
 	int result = INV_SUCCESS;
-	unsigned char reg = 0x00;  //                                          
+	unsigned char reg;
 
 	result = inv_serial_read(gyro_handle, mldl_cfg->mpu_chip_info->addr,
 				 MPUREG_DMP_CFG_2, 1, &reg);
@@ -1725,8 +1733,9 @@ int inv_mpu_suspend(struct mldl_cfg *mldl_cfg,
 		}
 	}
 
-	/* MPU : modify to make accel sleep in suspend */
-	if (suspend_slave[EXT_SLAVE_TYPE_GYROSCOPE]) {
+	/* Gyro */
+	if (suspend_slave[EXT_SLAVE_TYPE_GYROSCOPE] &&
+	    !(mldl_cfg->inv_mpu_state->status & MPU_GYRO_IS_SUSPENDED)) {
 		result = mpu60xx_pwr_mgmt(mldl_cfg, gyro_handle, false,
 					((~sensors) & INV_ALL_SENSORS));
 		if (result) {
@@ -1772,6 +1781,16 @@ int inv_mpu_suspend(struct mldl_cfg *mldl_cfg,
 		result = mpu_set_i2c_bypass(
 			mldl_cfg, gyro_handle,
 			!(mldl_cfg->inv_mpu_state->i2c_slaves_enabled));
+		if (result) {
+			LOG_RESULT_LOCATION(result);
+			return result;
+		}
+	}
+	/* Disable irq when suspend all sensors */
+	if (sensors == INV_ALL_SENSORS) {
+		result = inv_serial_single_write(
+			gyro_handle, mldl_cfg->mpu_chip_info->addr,
+			MPUREG_INT_ENABLE, 0);
 		if (result) {
 			LOG_RESULT_LOCATION(result);
 			return result;

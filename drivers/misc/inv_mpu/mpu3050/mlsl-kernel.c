@@ -20,7 +20,7 @@
 #include "mlsl.h"
 #include <linux/i2c.h>
 #include "log.h"
-#include "mpu6050b1.h"
+#include "mpu3050.h"
 
 static int inv_i2c_write(struct i2c_adapter *i2c_adap,
 			    unsigned char address,
@@ -41,6 +41,8 @@ static int inv_i2c_write(struct i2c_adapter *i2c_adap,
 
 	res = i2c_transfer(i2c_adap, msgs, 1);
 	if (res < 1) {
+		if (res == 0)
+			res = -EIO;
 		LOG_RESULT_LOCATION(res);
 		return res;
 	} else
@@ -82,6 +84,8 @@ static int inv_i2c_read(struct i2c_adapter *i2c_adap,
 
 	res = i2c_transfer(i2c_adap, msgs, 2);
 	if (res < 2) {
+		if (res >= 0)
+			res = -EIO;
 		LOG_RESULT_LOCATION(res);
 		return res;
 	} else
@@ -136,6 +140,8 @@ static int mpu_memory_read(struct i2c_adapter *i2c_adap,
 
 	res = i2c_transfer(i2c_adap, msgs, 4);
 	if (res != 4) {
+		if (res >= 0)
+			res = -EIO;
 		LOG_RESULT_LOCATION(res);
 		return res;
 	} else
@@ -190,6 +196,8 @@ static int mpu_memory_write(struct i2c_adapter *i2c_adap,
 
 	res = i2c_transfer(i2c_adap, msgs, 3);
 	if (res != 3) {
+		if (res >= 0)
+			res = -EIO;
 		LOG_RESULT_LOCATION(res);
 		return res;
 	} else

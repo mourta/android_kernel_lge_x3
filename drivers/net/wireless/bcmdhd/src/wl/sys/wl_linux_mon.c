@@ -40,9 +40,6 @@
 #include <dngl_stats.h>
 #include <dhd.h>
 
-/* Redefine LINUX_VERSION_CODE (KERNEL_VERSION(3, 4, 0)) */
-#define LINUX_VERSION_CODE      KERNEL_VERSION(3, 4, 0)
-
 typedef enum monitor_states
 {
 	MONITOR_STATE_DEINIT = 0x0,

@@ -72,10 +72,6 @@
 #include "timer.h"
 #include "dvfs.h"
 #include "cpu-tegra.h"
-#include "gpio-names.h"
-#include "wakeups-t3.h"
-#include <linux/gpio.h>
-u64 global_wake_status=0;
 
 struct suspend_context {
 	/*
@@ -1121,32 +1117,10 @@ static int tegra_pm_enter_suspend(void)
 	return 0;
 }
 
-extern u64 read_pmc_wake_status(void);
 static void tegra_pm_enter_resume(void)
 {
 	if (current_suspend_mode == TEGRA_SUSPEND_LP0)
-	{
-			int wake = 0;
-			unsigned long global_wake_status_translate = 0;
-
-			global_wake_status = read_pmc_wake_status();
-			global_wake_status_translate = (unsigned long)global_wake_status;
-
-			for_each_set_bit(wake, &global_wake_status_translate, sizeof(global_wake_status_translate) * 8)
-			{
-					if((wake == TEGRA_WAKE_KBC_EVENT) || (wake == TEGRA_WAKE_GPIO_PV0))
-                                break;
-                }
-
-                	if((wake == TEGRA_WAKE_KBC_EVENT) || (wake == TEGRA_WAKE_GPIO_PV0))
-                {
-                                pr_info("tegra_pm_enter_resume global_wake_status=0x%x\n",(u32)global_wake_status);
-                                tegra_lp0_cpu_mode(false);
-                                global_wake_status = ( TEGRA_WAKE_KBC_EVENT|TEGRA_WAKE_GPIO_PV0);
-                }
-                else
-                        global_wake_status =0;
-        }
+		tegra_lp0_cpu_mode(false);
 	pr_info("Exited suspend state %s\n", lp_state[current_suspend_mode]);
 }
 

@@ -41,7 +41,7 @@ static struct kobject *runnables_kobject;
 
 /* configurable parameters */
 #define DEBUG 			(0)
-#define MIN_UP_FREQ		(900	* 1000000)	// Freq in MHz
+#define MIN_UP_FREQ		(860	* 1000000)	// Freq in MHz
 
 static unsigned int sample_rate = 20;		/* msec */
 

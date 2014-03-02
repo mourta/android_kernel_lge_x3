@@ -42,6 +42,11 @@
 #include <linux/wait.h>
 #include <linux/uaccess.h>
 #include <linux/io.h>
+#include <linux/delay.h>
+
+#include <linux/notifier.h>
+#include <linux/reboot.h>
+
 
 #include "mpuirq.h"
 #include "slaveirq.h"
@@ -49,6 +54,15 @@
 #include "mldl_cfg.h"
 #include <linux/mpu.h>
 
+#include "accel/mpu6050.h"
+
+#include "../../../arch/arm/mach-tegra/gpio-names.h"
+#include "../../../arch/arm/mach-tegra/lge/x3/include/lge/board-x3.h"
+
+#include <linux/regulator/consumer.h>
+
+#define FEATURE_MPU_SYSFS
+#define SENSOR_COMMON_LDO_CTRL
 
 /* Platform data for the MPU */
 struct mpu_private_data {
@@ -74,9 +88,571 @@ struct mpu_private_data {
 	unsigned long event;
 	int pid;
 	struct module *slave_modules[EXT_SLAVE_NUM_TYPES];
+
+#ifdef FEATURE_MPU_SYSFS
+  atomic_t enable_accel;
+  atomic_t enable_compass;
+  atomic_t enable_gyro;
+  int enabled_accel_by_sysfs;
+  int enabled_compass_by_sysfs;
+  int enabled_gyro_by_sysfs;
+
+  unsigned char gyro_pwr_mgnt[2];
+  unsigned char int_pin_cfg;
+  
+  struct mutex sysfs_mutex;
+  struct i2c_adapter* adaptors[EXT_SLAVE_NUM_TYPES];
+#endif//FEATURE_MPU_SYSFS
+#ifdef SENSOR_COMMON_LDO_CTRL
+        struct delayed_work     dwork;  /* for Power on/Off */
+        struct regulator *mpu_vdd_reg;
+        struct regulator *mpu_vlogic_reg;
+#endif
 };
 
 struct mpu_private_data *mpu_private_data;
+static int mpu_is_shutdown = 0;
+static int mpu_vdd_ldo_en		= TEGRA_GPIO_PX7;
+static int mpu_vlogic_ldo_en		= TEGRA_GPIO_PD2;
+
+static void mpu_power_vdd_control(struct mpu_private_data *data, bool is_enable)
+{
+	int ret;
+
+	if (!data->mpu_vdd_reg) {
+		data->mpu_vdd_reg = regulator_get(&data->client->dev, "vdd_3v_ldo");
+		if (IS_ERR_OR_NULL(data->mpu_vdd_reg)) {
+			dev_WARN(&data->client->dev, "Error [%d] in "
+				"getting the regulator handle for vdd_3v_ldo "
+				"of %s\n", (int)data->mpu_vdd_reg,
+				dev_name(&data->client->dev));
+			data->mpu_vdd_reg = NULL;
+			return;
+		}
+	}
+	if (is_enable)
+		ret = regulator_enable(data->mpu_vdd_reg);
+	else
+		ret = regulator_disable(data->mpu_vdd_reg);
+
+	if (ret < 0)
+		dev_err(&data->client->dev, "Error in %s rail vdd_3v_ldo, "
+			"error %d\n", (is_enable) ? "enabling" : "disabling",
+			ret);
+	else
+		dev_info(&data->client->dev, "success in %s rail vdd_3v_ldo\n",
+			(is_enable) ? "enabling" : "disabling");
+}
+
+static void mpu_power_vlogic_control(struct mpu_private_data *data, bool is_enable)
+{
+	int ret;
+
+	if (!data->mpu_vlogic_reg) {
+		data->mpu_vlogic_reg = regulator_get(&data->client->dev, "vlg_1v8_ldo");
+		if (IS_ERR_OR_NULL(data->mpu_vlogic_reg)) {
+			dev_WARN(&data->client->dev, "Error [%d] in "
+				"getting the regulator handle for vlg_1v8_ldo "
+				"of %s\n", (int)data->mpu_vlogic_reg,
+				dev_name(&data->client->dev));
+			data->mpu_vlogic_reg = NULL;
+			return;
+		}
+	}
+	if (is_enable)
+		ret = regulator_enable(data->mpu_vlogic_reg);
+	else
+		ret = regulator_disable(data->mpu_vlogic_reg);
+
+	if (ret < 0)
+		dev_err(&data->client->dev, "Error in %s rail vlg_1v8_ldo, "
+			"error %d\n", (is_enable) ? "enabling" : "disabling",
+			ret);
+	else
+		dev_info(&data->client->dev, "success in %s rail vlg_1v8_ldo\n",
+			(is_enable) ? "enabling" : "disabling");
+}
+
+#ifdef FEATURE_MPU_SYSFS
+
+static int mpu_sysfs_is_suspended(
+    struct mldl_cfg *mldl_cfg,
+    int slave_type
+)
+{
+  int status = mldl_cfg->inv_mpu_state->status;
+  
+  return (status >> slave_type) & 0x1;
+}
+
+
+static int mpu_sysfs_enable_accel(
+    struct mpu_private_data* data,
+    int enable)
+{
+  int result = 0;
+	struct mpu_private_data *mpu = mpu_private_data;
+	struct mldl_cfg *mldl_cfg = &mpu->mldl_cfg;
+  struct i2c_adapter *accel_adapter = mpu->adaptors[EXT_SLAVE_TYPE_ACCEL];
+  
+  if(enable) {
+    if(mpu_sysfs_is_suspended(mldl_cfg,EXT_SLAVE_TYPE_ACCEL)) {
+      if (NULL != mldl_cfg->slave[EXT_SLAVE_TYPE_ACCEL]->resume) {
+  	    result = mldl_cfg->slave[EXT_SLAVE_TYPE_ACCEL]->resume(accel_adapter,
+  						 mldl_cfg->slave[EXT_SLAVE_TYPE_ACCEL],
+						mldl_cfg->pdata_slave[EXT_SLAVE_TYPE_ACCEL]);
+      }
+      data->enabled_accel_by_sysfs = 1;
+    }
+  } else {
+    if(mpu_sysfs_is_suspended(mldl_cfg,EXT_SLAVE_TYPE_ACCEL) && 
+        data->enabled_accel_by_sysfs) {
+
+      if (NULL != mldl_cfg->slave[EXT_SLAVE_TYPE_ACCEL]->suspend) {
+  	    result = mldl_cfg->slave[EXT_SLAVE_TYPE_ACCEL]->suspend(accel_adapter,
+  						 mldl_cfg->slave[EXT_SLAVE_TYPE_ACCEL],
+						mldl_cfg->pdata_slave[EXT_SLAVE_TYPE_ACCEL]);
+      }
+        
+      data->enabled_accel_by_sysfs = 0;
+    }    
+  }
+
+  return 0;
+}
+
+static int mpu_sysfs_enable_compass(
+    struct mpu_private_data* data,
+    int enable)
+{
+  int result = 0;
+	struct mpu_private_data *mpu = mpu_private_data;
+	struct mldl_cfg *mldl_cfg = &mpu->mldl_cfg;
+  struct i2c_adapter *compass_adapter = mpu->adaptors[EXT_SLAVE_TYPE_COMPASS];
+  
+  if(enable) {
+    if(mpu_sysfs_is_suspended(mldl_cfg,EXT_SLAVE_TYPE_COMPASS)) {
+      if (NULL != mldl_cfg->slave[EXT_SLAVE_TYPE_COMPASS]->resume) {
+  	    result = mldl_cfg->slave[EXT_SLAVE_TYPE_COMPASS]->resume(compass_adapter,
+  						 mldl_cfg->slave[EXT_SLAVE_TYPE_COMPASS],
+						mldl_cfg->pdata_slave[EXT_SLAVE_TYPE_COMPASS]);
+      }
+      data->enabled_compass_by_sysfs = 1;
+    }
+  } else {
+    if(mpu_sysfs_is_suspended(mldl_cfg,EXT_SLAVE_TYPE_COMPASS) && 
+        data->enabled_accel_by_sysfs) {
+        
+      if (NULL != mldl_cfg->slave[EXT_SLAVE_TYPE_COMPASS]->suspend) {
+  	    result = mldl_cfg->slave[EXT_SLAVE_TYPE_COMPASS]->suspend(compass_adapter,
+  						 mldl_cfg->slave[EXT_SLAVE_TYPE_COMPASS],
+						mldl_cfg->pdata_slave[EXT_SLAVE_TYPE_COMPASS]);
+      }
+      data->enabled_compass_by_sysfs = 1;
+    }    
+  }
+
+  return 0;
+}
+
+
+
+static int mpu_sysfs_enable_gyro(
+    struct mpu_private_data* data,
+    int enable)
+{
+  int result = 0;
+	struct mpu_private_data *mpu = mpu_private_data;
+	struct mldl_cfg *mldl_cfg = &mpu->mldl_cfg;
+
+  void* gyro_handle = (void*)mpu->adaptors[EXT_SLAVE_TYPE_GYROSCOPE];
+  
+  if(enable) {
+    if(mpu_sysfs_is_suspended(mldl_cfg,EXT_SLAVE_TYPE_GYROSCOPE)) {
+      unsigned char regs[7];
+
+    	result = inv_serial_read(gyro_handle,0x68,MPUREG_PWR_MGMT_1, 2, data->gyro_pwr_mgnt);
+      result = inv_serial_read(gyro_handle,0x68,MPUREG_INT_PIN_CFG, 1, &data->int_pin_cfg);
+
+      result = inv_serial_single_write(gyro_handle,0x68,MPUREG_PWR_MGMT_1, data->gyro_pwr_mgnt[0] | BIT_H_RESET);
+      msleep(30);
+      result = inv_serial_single_write(gyro_handle,0x68,MPUREG_PWR_MGMT_1, data->gyro_pwr_mgnt[0] & ~BIT_SLEEP);
+
+      if(data->gyro_pwr_mgnt[0] & 0x40) {
+        result = inv_serial_single_write(gyro_handle,0x68,MPUREG_PWR_MGMT_1,0x00);
+      }
+      
+      //result = inv_serial_single_write(gyro_handle,0x68,MPUREG_USER_CTRL, 0x00);  
+      result = inv_serial_single_write(gyro_handle,0x68,MPUREG_SMPLRT_DIV,0x00);
+      regs[0] = 0x03 | 0x18;
+      result = inv_serial_single_write(gyro_handle,0x68,MPUREG_CONFIG, regs[0]);   
+      result = inv_serial_single_write(gyro_handle,0x68,MPUREG_GYRO_CONFIG, MPUREG_GYRO_CONFIG_VALUE(0,0,0,MPU_FS_2000DPS));
+      result = inv_serial_single_write(gyro_handle,0x68,MPUREG_INT_ENABLE, 0x00); 
+
+      result = inv_serial_single_write(gyro_handle,0x68,MPUREG_PWR_MGMT_1, 0x01);  
+
+      data->enabled_gyro_by_sysfs = 1;
+    }
+  } else {
+    if(mpu_sysfs_is_suspended(mldl_cfg,EXT_SLAVE_TYPE_GYROSCOPE) && 
+        data->enabled_gyro_by_sysfs)
+    {
+      unsigned char int_pin = 0;
+      
+      
+
+      result = inv_serial_single_write(gyro_handle,0x68,MPUREG_INT_PIN_CFG, data->int_pin_cfg | BIT_BYPASS_EN);  
+      
+      if(data->gyro_pwr_mgnt[0] & 0x40) {
+        result = inv_serial_single_write(gyro_handle,0x68,MPUREG_PWR_MGMT_1, data->gyro_pwr_mgnt[0]); 
+      }
+      data->enabled_gyro_by_sysfs = 0;
+    }
+  }
+
+  return 0;
+}
+
+
+
+
+static ssize_t
+mpu_sysfs_accel_enable_show(struct device *dev,
+                     struct device_attribute *attr,
+                     char *buf)
+{
+	  struct mpu_private_data *mpu = mpu_private_data;
+
+    return sprintf(buf, "%d\n", atomic_read(&mpu->enable_accel));
+}
+
+static ssize_t
+mpu_sysfs_accel_enable_store(struct device *dev,
+                      struct device_attribute *attr,
+                      const char *buf,
+                      size_t count)
+{
+	  struct mpu_private_data *mpu = mpu_private_data;
+
+    int value = simple_strtoul(buf, NULL, 10);
+
+    mpu_sysfs_enable_accel(mpu, value);
+
+    atomic_set(&mpu->enable_accel, value);
+    return count;
+}
+
+int mpu_get_accel_facing_up(long z_threshold)
+{
+	struct mpu_private_data *mpu = mpu_private_data;
+	struct mldl_cfg *mldl_cfg = &mpu->mldl_cfg;
+  struct i2c_adapter *accel_adapter = mpu->adaptors[EXT_SLAVE_TYPE_ACCEL];
+  
+  ssize_t content_size =0;
+	unsigned char acceldata[6] = {0};
+	int16_t accel_axis[3] = {0};
+  int16_t oriented_accel[3] = {0};
+  __s8* orientation = NULL;
+  int result = 0;
+  
+  if(!mpu_sysfs_is_suspended(mldl_cfg,EXT_SLAVE_TYPE_ACCEL) || mpu->enabled_accel_by_sysfs) {
+
+    if (NULL != mldl_cfg->slave[EXT_SLAVE_TYPE_ACCEL]->read) {
+      int i=0;
+	    mldl_cfg->slave[EXT_SLAVE_TYPE_ACCEL]->read(accel_adapter,
+              mldl_cfg->slave[EXT_SLAVE_TYPE_ACCEL],
+    					mldl_cfg->pdata_slave[EXT_SLAVE_TYPE_ACCEL],
+    					acceldata);
+    for (i = 0; i < ARRAY_SIZE(accel_axis); i++)
+    {
+        accel_axis[i] = (long)((signed char)acceldata[2 * i]) * 256;
+        accel_axis[i] += (long)((unsigned char)acceldata[2 * i + 1]);
+    }    
+    
+    orientation = mldl_cfg->pdata_slave[EXT_SLAVE_TYPE_ACCEL]->orientation;
+    
+    for (i = 0; i < ARRAY_SIZE(accel_axis); i++) {
+        oriented_accel[i] = ((long)accel_axis[0] * orientation[3 * i] +
+                    (long)accel_axis[1] * orientation[3 * i + 1] +
+                    (long)accel_axis[2] * orientation[3 * i + 2]);
+    }
+
+      if(z_threshold < oriented_accel[2])
+        result = 1;
+      else
+        result = 0;
+      
+    }
+    
+  }
+
+  return result;
+}
+
+
+
+static ssize_t
+mpu_sysfs_accel_raw_show(struct device *dev,
+                     struct device_attribute *attr,
+                     char *buf)
+{
+	struct mpu_private_data *mpu = mpu_private_data;
+	struct mldl_cfg *mldl_cfg = &mpu->mldl_cfg;
+  struct i2c_adapter *accel_adapter = mpu->adaptors[EXT_SLAVE_TYPE_ACCEL];
+  
+  ssize_t content_size =0;
+	unsigned char acceldata[6] = {0};
+	int16_t accel_axis[3] = {0};
+  int16_t oriented_accel[3] = {0};
+  __s8* orientation = NULL;
+  
+  if(!mpu_sysfs_is_suspended(mldl_cfg,EXT_SLAVE_TYPE_ACCEL) || mpu->enabled_accel_by_sysfs) {
+
+    if (NULL != mldl_cfg->slave[EXT_SLAVE_TYPE_ACCEL]->read) {
+      int i=0;
+	    mldl_cfg->slave[EXT_SLAVE_TYPE_ACCEL]->read(accel_adapter,
+              mldl_cfg->slave[EXT_SLAVE_TYPE_ACCEL],
+    					mldl_cfg->pdata_slave[EXT_SLAVE_TYPE_ACCEL],
+    					acceldata);
+#if 0  //original          
+      for ( i = 0; i < 3; i++ )
+	    {
+	        accel_axis[i] = acceldata[i*2] + acceldata[i*2 + 1]<<8;
+	    }
+
+      orientation = mldl_cfg->pdata_slave[EXT_SLAVE_TYPE_ACCEL]->orientation;
+      
+      for ( i = 0; i < 3; i++ )
+	    {
+ 	        oriented_accel[i] = orientation[i*3]*accel_axis[0]
+                                + orientation[i*3+1]*accel_axis[1]
+                                + orientation[i*3+2]*accel_axis[2];
+	    }
+
+#else //New
+    for (i = 0; i < ARRAY_SIZE(accel_axis); i++)
+    {
+        accel_axis[i] = (long)((signed char)acceldata[2 * i]) * 256;
+        accel_axis[i] += (long)((unsigned char)acceldata[2 * i + 1]);
+    }    
+    
+    orientation = mldl_cfg->pdata_slave[EXT_SLAVE_TYPE_ACCEL]->orientation;
+    
+    for (i = 0; i < ARRAY_SIZE(accel_axis); i++) {
+        oriented_accel[i] = ((long)accel_axis[0] * orientation[3 * i] +
+                    (long)accel_axis[1] * orientation[3 * i + 1] +
+                    (long)accel_axis[2] * orientation[3 * i + 2]);
+    }
+#endif     
+      
+    }
+    
+  	content_size = sprintf(buf, "%8ld, %8ld, %8ld \n",
+  	                        oriented_accel[0], oriented_accel[1], oriented_accel[2]);
+  }
+
+  return content_size;
+}
+
+
+static ssize_t
+mpu_sysfs_compass_enable_show(struct device *dev,
+                     struct device_attribute *attr,
+                     char *buf)
+{
+	  struct mpu_private_data *mpu = mpu_private_data;
+
+    return sprintf(buf, "%d\n", atomic_read(&mpu->enable_compass));
+}
+
+static ssize_t
+mpu_sysfs_compass_enable_store(struct device *dev,
+                      struct device_attribute *attr,
+                      const char *buf,
+                      size_t count)
+{
+	  struct mpu_private_data *mpu = mpu_private_data;
+
+    int value = simple_strtoul(buf, NULL, 10);
+
+    mpu_sysfs_enable_compass(mpu, value);
+
+    atomic_set(&mpu->enable_compass, value);
+    return count;
+}
+
+static ssize_t
+mpu_sysfs_compass_raw_show(struct device *dev,
+                     struct device_attribute *attr,
+                     char *buf)
+{
+	struct mpu_private_data *mpu = mpu_private_data;
+	struct mldl_cfg *mldl_cfg = &mpu->mldl_cfg;
+  struct i2c_adapter *compass_adapter = mpu->adaptors[EXT_SLAVE_TYPE_COMPASS];
+  
+  ssize_t content_size =0;
+	unsigned char compassdata[6] = {0};
+	int16_t compass_axis[3] = {0};
+  int16_t oriented_compass[3] = {0};
+  __s8* orientation = NULL;
+  
+  if(!mpu_sysfs_is_suspended(mldl_cfg,EXT_SLAVE_TYPE_COMPASS) || mpu->enabled_compass_by_sysfs) {
+
+    if (NULL != mldl_cfg->slave[EXT_SLAVE_TYPE_COMPASS]->read) {
+      int i=0;
+	    mldl_cfg->slave[EXT_SLAVE_TYPE_COMPASS]->read(compass_adapter,
+              mldl_cfg->slave[EXT_SLAVE_TYPE_COMPASS],
+    					mldl_cfg->pdata_slave[EXT_SLAVE_TYPE_COMPASS],
+    					compassdata);
+      for ( i = 0; i < 3; i++ )
+	    {
+	        compass_axis[i] = (compassdata[i*2]<<8) + compassdata[i*2 + 1];
+	    }
+
+      orientation = mldl_cfg->pdata_slave[EXT_SLAVE_TYPE_ACCEL]->orientation;
+      
+      for ( i = 0; i < 3; i++ )
+	    {
+ 	        oriented_compass[i] = orientation[i*3]*compass_axis[0]
+                                + orientation[i*3+1]*compass_axis[1]
+                                + orientation[i*3+2]*compass_axis[2];
+	    }
+      
+    }
+    
+  	content_size = sprintf(buf, "%d %d %d \n",
+  	                        oriented_compass[0], oriented_compass[1], oriented_compass[2]);
+  }
+
+  return content_size;
+}
+
+
+static ssize_t
+mpu_sysfs_gyro_enable_show(struct device *dev,
+                     struct device_attribute *attr,
+                     char *buf)
+{
+	  struct mpu_private_data *mpu = mpu_private_data;
+
+    return sprintf(buf, "%d\n", atomic_read(&mpu->enable_gyro));
+}
+
+static ssize_t
+mpu_sysfs_gyro_enable_store(struct device *dev,
+                      struct device_attribute *attr,
+                      const char *buf,
+                      size_t count)
+{
+  	struct mpu_private_data *mpu = mpu_private_data;
+
+    int value = simple_strtoul(buf, NULL, 10);
+
+    mpu_sysfs_enable_gyro(mpu,value);
+
+    atomic_set(&mpu->enable_gyro, value);
+    return count;
+}
+
+static ssize_t
+mpu_sysfs_gyro_raw_show(struct device *dev,
+                     struct device_attribute *attr,
+                     char *buf)
+{
+	struct mpu_private_data *mpu = mpu_private_data;
+	struct mldl_cfg *mldl_cfg = &mpu->mldl_cfg;
+
+  void* gyro_handle = (void*)mpu->adaptors[EXT_SLAVE_TYPE_GYROSCOPE];
+  ssize_t content_size =0;
+	unsigned char data[6] = {0};
+	int16_t gyro_axis[3] = {0};
+  int16_t oriented_gyro[3] = {0};
+  __s8* orientation = NULL;
+
+  if(!mpu_sysfs_is_suspended(mldl_cfg,EXT_SLAVE_TYPE_GYROSCOPE) || mpu->enabled_gyro_by_sysfs) {
+    int i =0;
+
+    inv_serial_read(gyro_handle, 0x68, MPUREG_GYRO_XOUT_H, 6,data);
+    
+    for( i = 0; i < 3; i++ )
+    {
+        gyro_axis[i] = data[i*2]*256+data[i*2+1];
+    }
+
+    orientation = mldl_cfg->pdata_slave[EXT_SLAVE_TYPE_ACCEL]->orientation;
+    
+    for ( i = 0; i < 3; i++ )
+    {
+	        oriented_gyro[i] = orientation[i*3]*gyro_axis[0]
+                              + orientation[i*3+1]*gyro_axis[1]
+                              + orientation[i*3+2]*gyro_axis[2];
+    }
+    
+  	content_size = sprintf(buf, "%d %d %d \n", gyro_axis[0], gyro_axis[1], gyro_axis[2]);
+    printk("%s\n",buf);
+  }
+
+  return content_size;
+}
+
+
+static DEVICE_ATTR(enable_accel, 0660,
+                   mpu_sysfs_accel_enable_show, mpu_sysfs_accel_enable_store);
+static DEVICE_ATTR(read_accel, 0660,
+                   mpu_sysfs_accel_raw_show, NULL);
+static DEVICE_ATTR(enable_compass, 0660,
+                   mpu_sysfs_compass_enable_show, mpu_sysfs_compass_enable_store);
+static DEVICE_ATTR(read_compass, 0660,
+                   mpu_sysfs_compass_raw_show, NULL);
+static DEVICE_ATTR(enable_gyro, 0660,          
+                   mpu_sysfs_gyro_enable_show, mpu_sysfs_gyro_enable_store);
+static DEVICE_ATTR(read_gyro, 0660,
+                   mpu_sysfs_gyro_raw_show, NULL);
+
+
+static int mpu_sysfs_init(
+    struct miscdevice* dev, 
+    struct mpu_private_data* data
+)
+{
+
+	struct mpu_private_data *mpu = mpu_private_data;
+	struct i2c_client *client = mpu->client;  
+	struct mldl_cfg *mldl_cfg = &mpu->mldl_cfg;
+	int ii;
+	struct ext_slave_platform_data **pdata_slave = mldl_cfg->pdata_slave;
+  int retval = -ENOMEM;
+
+
+  printk("mpu_sysfs_init\n");
+
+	for (ii = 0; ii < EXT_SLAVE_NUM_TYPES;ii++) 
+  {
+		if (!pdata_slave[ii])
+			mpu->adaptors[ii] = NULL;
+		else
+			mpu->adaptors[ii] =
+				i2c_get_adapter(pdata_slave[ii]->adapt_num);
+	}
+
+  mpu->adaptors[EXT_SLAVE_TYPE_GYROSCOPE] = client->adapter;
+
+  atomic_set(&data->enable_accel,0);
+  atomic_set(&data->enable_gyro,0);
+
+  retval = device_create_file(dev->this_device, &dev_attr_enable_accel);
+  retval = device_create_file(dev->this_device, &dev_attr_read_accel);
+  retval = device_create_file(dev->this_device, &dev_attr_enable_compass);
+  retval = device_create_file(dev->this_device, &dev_attr_read_compass);
+  retval = device_create_file(dev->this_device, &dev_attr_enable_gyro);
+  retval = device_create_file(dev->this_device, &dev_attr_read_gyro);
+  
+  return 0;
+}
+
+
+#endif //FEATURE_MPU_SYSFS
+
 
 static void mpu_pm_timeout(u_long data)
 {
@@ -94,6 +670,8 @@ static int mpu_pm_notifier_callback(struct notifier_block *nb,
 	struct i2c_client *client = mpu->client;
 	struct timeval event_time;
 	dev_dbg(&client->adapter->dev, "%s: %ld\n", __func__, event);
+
+	printk("%s start [%d]\n", __func__, event);  //for debug
 
 	/* Prevent the file handle from being closed before we initialize
 	   the completion event */
@@ -573,6 +1151,8 @@ static long mpu_dev_ioctl(struct file *file,
 	struct ext_slave_platform_data **pdata_slave = mldl_cfg->pdata_slave;
 	int ii;
 
+	if(mpu_is_shutdown == 1) return;
+
 	for (ii = 0; ii < EXT_SLAVE_NUM_TYPES; ii++) {
 		if (!pdata_slave[ii])
 			slave_adapter[ii] = NULL;
@@ -812,6 +1392,58 @@ void mpu_shutdown(struct i2c_client *client)
 	dev_dbg(&client->adapter->dev, "%s\n", __func__);
 }
 
+#ifdef SENSOR_COMMON_LDO_CTRL
+static void mpu_reschedule_work(struct mpu_private_data *data,
+					  unsigned long delay)
+{
+	/*
+	 * If work is already scheduled then subsequent schedules will not
+	 * change the scheduled time that's why we have to cancel it first.
+	 */
+	__cancel_delayed_work(&data->dwork);
+	schedule_delayed_work(&data->dwork, delay);
+}
+
+static void mpu_work_handler(struct work_struct *work)
+{
+        struct mpu_private_data *mpu =
+            container_of(work, struct mpu_private_data, dwork.work);
+	struct i2c_client *client=mpu->client;
+
+                //struct mpu_private_data *mpu =
+                //    (struct mpu_private_data *)i2c_get_clientdata(client);
+                struct mldl_cfg *mldl_cfg = &mpu->mldl_cfg;
+                struct i2c_adapter *slave_adapter[EXT_SLAVE_NUM_TYPES];
+                struct ext_slave_platform_data **pdata_slave = mldl_cfg->pdata_slave;
+                int ii;
+        
+                for (ii = 0; ii < EXT_SLAVE_NUM_TYPES; ii++) {
+                        if (!pdata_slave[ii])
+                                slave_adapter[ii] = NULL;
+                        else
+                                slave_adapter[ii] =
+                                        i2c_get_adapter(pdata_slave[ii]->adapt_num);
+                }
+                slave_adapter[EXT_SLAVE_TYPE_GYROSCOPE] = client->adapter;
+        
+                mutex_lock(&mpu->mutex);
+                if (mpu->pid && !mldl_cfg->inv_mpu_cfg->ignore_system_suspend) {
+                        (void)inv_mpu_resume(mldl_cfg,
+                                        slave_adapter[EXT_SLAVE_TYPE_GYROSCOPE],
+                                        slave_adapter[EXT_SLAVE_TYPE_ACCEL],
+                                        slave_adapter[EXT_SLAVE_TYPE_COMPASS],
+                                        slave_adapter[EXT_SLAVE_TYPE_PRESSURE],
+                                        mldl_cfg->inv_mpu_cfg->requested_sensors);
+                        dev_dbg(&client->adapter->dev,
+                                "%s for pid %d\n", __func__, mpu->pid);
+                }
+                mutex_unlock(&mpu->mutex);
+                
+                printk("[%s] mpu6050 LDO 1.8V : %d, LDO 3.0V : %d, Line[%d]\n",__func__, gpio_get_value(mpu_vlogic_ldo_en),gpio_get_value(mpu_vdd_ldo_en),__LINE__);         
+
+}
+#endif
+
 int mpu_dev_suspend(struct i2c_client *client, pm_message_t mesg)
 {
 	struct mpu_private_data *mpu =
@@ -845,6 +1477,41 @@ int mpu_dev_suspend(struct i2c_client *client, pm_message_t mesg)
 			"%s: Already suspended %d\n", __func__, mesg.event);
 	}
 	mutex_unlock(&mpu->mutex);
+
+	//printk("[mpu_dev_suspend-before] mpu6050 LDO 1.8V : %d, LDO 3.0V : %d, Line[%d]\n", gpio_get_value(mpu_vlogic_ldo_en), gpio_get_value(mpu_vdd_ldo_en),__LINE__); 	
+        // Power off Condition : VDD - VLOGIC >= 0
+#if defined(CONFIG_MACH_VU10)
+	mpu_power_vlogic_control(mpu, false);
+#else
+	switch(x3_get_hw_rev_pcb_version())
+	{
+	case hw_rev_pcb_type_A :
+	case hw_rev_pcb_type_B :
+	case hw_rev_pcb_type_C :
+	gpio_set_value(mpu_vlogic_ldo_en,0);		// VLOGIC LDO OFF.
+	udelay(10); 		 //no delay for working when VLOGIC is On or Off
+	gpio_set_value(mpu_vdd_ldo_en,0);		// VDD LDO OFF.
+
+	cancel_delayed_work_sync(&mpu->dwork);		// avoid i2c timeout error 
+
+		break;
+	case hw_rev_pcb_type_D :
+    mpu_power_vlogic_control(mpu, false);
+    udelay(10); 		 //no delay for working when VLOGIC is On or Off
+	mpu_power_vdd_control(mpu, false);
+
+	cancel_delayed_work_sync(&mpu->dwork);		// avoid i2c timeout error 
+
+		break;
+	case hw_rev_pcb_type_E :
+	case hw_rev_pcb_type_1_0 :
+	default:
+	mpu_power_vlogic_control(mpu, false);
+		break;
+	}
+#endif
+	printk("[mpu_dev_suspend-After] mpu6050 LDO 1.8V : %d, LDO 3.0V : %d, Line[%d]\n", gpio_get_value(mpu_vlogic_ldo_en), gpio_get_value(mpu_vdd_ldo_en),__LINE__); 	
+
 	return 0;
 }
 
@@ -857,6 +1524,61 @@ int mpu_dev_resume(struct i2c_client *client)
 	struct ext_slave_platform_data **pdata_slave = mldl_cfg->pdata_slave;
 	int ii;
 
+        printk("[mpu_dev_resume-before] mpu6050 LDO 1.8V : %d, LDO 3.0V : %d, Line[%d]\n", gpio_get_value(mpu_vlogic_ldo_en),gpio_get_value(mpu_vdd_ldo_en),__LINE__);  
+         // Power on Condition : VLOGIC - VDD >= 0
+#if defined(CONFIG_MACH_VU10)
+	mpu_power_vlogic_control(mpu, true);
+	udelay(10);		  //no delay for working when VLOGIC is On or Off
+#else
+		 switch(x3_get_hw_rev_pcb_version())
+		 {
+		 case hw_rev_pcb_type_A :
+		 case hw_rev_pcb_type_B :
+		 case hw_rev_pcb_type_C :
+	gpio_set_value(mpu_vdd_ldo_en,1);				// VDD LDO ON.
+	udelay(10); 		 //no delay for working when VLOGIC is On or Off
+	gpio_set_value(mpu_vlogic_ldo_en,1);		// VLOGIC LDO ON.
+			 break;
+		 case hw_rev_pcb_type_D :
+	mpu_power_vdd_control(mpu, true);
+	udelay(10); 		 //no delay for working when VLOGIC is On or Off
+	mpu_power_vlogic_control(mpu, true);
+			 break;
+		 case hw_rev_pcb_type_E :
+		 case hw_rev_pcb_type_1_0 :
+		 default:
+	mpu_power_vlogic_control(mpu, true);
+	udelay(10); 		 //no delay for working when VLOGIC is On or Off
+			 break;
+		 }
+#endif
+       //tsw - VLOGIC <= 100msec.
+        // s/w working need interval time is min. = 30msec. max. = 100msec. after VDD set Power On.
+#if defined(CONFIG_MACH_VU10)
+	for (ii = 0; ii < EXT_SLAVE_NUM_TYPES; ii++) {
+		if (!pdata_slave[ii])
+			slave_adapter[ii] = NULL;
+		else
+			slave_adapter[ii] =
+				i2c_get_adapter(pdata_slave[ii]->adapt_num);
+	}
+	slave_adapter[EXT_SLAVE_TYPE_GYROSCOPE] = client->adapter;
+
+	mutex_lock(&mpu->mutex);
+	if (mpu->pid && !mldl_cfg->inv_mpu_cfg->ignore_system_suspend) {
+		(void)inv_mpu_resume(mldl_cfg,
+			slave_adapter[EXT_SLAVE_TYPE_GYROSCOPE],
+			slave_adapter[EXT_SLAVE_TYPE_ACCEL],
+			slave_adapter[EXT_SLAVE_TYPE_COMPASS],
+			slave_adapter[EXT_SLAVE_TYPE_PRESSURE],
+			mldl_cfg->inv_mpu_cfg->requested_sensors);
+		dev_dbg(&client->adapter->dev,
+			"%s for pid %d\n", __func__, mpu->pid);
+	}
+	mutex_unlock(&mpu->mutex);
+#else
+	   if(x3_get_hw_rev_pcb_version() > hw_rev_pcb_type_D)
+	   {
 	for (ii = 0; ii < EXT_SLAVE_NUM_TYPES; ii++) {
 		if (!pdata_slave[ii])
 			slave_adapter[ii] = NULL;
@@ -878,7 +1600,13 @@ int mpu_dev_resume(struct i2c_client *client)
 			"%s for pid %d\n", __func__, mpu->pid);
 	}
 	mutex_unlock(&mpu->mutex);
-	return 0;
+	   }
+	   else
+	   {
+	mpu_reschedule_work(mpu ,100);
+	   }
+#endif
+        return 0;
 }
 
 /* define which file operations are supported */
@@ -970,12 +1698,34 @@ int inv_mpu_register_slave(struct module *slave_module,
 		}
 	}
 
+	if (slave_descr->type == EXT_SLAVE_TYPE_ACCEL &&
+	    slave_descr->id == ACCEL_ID_MPU6050 &&
+	    slave_descr->config) {
+		/* pass a reference to the mldl_cfg data
+		   structure to the mpu6050 accel "class" */
+		struct ext_slave_config config;
+		config.key = MPU_SLAVE_CONFIG_INTERNAL_REFERENCE;
+		config.len = sizeof(struct mldl_cfg *);
+		config.apply = true;
+		config.data = mldl_cfg;
+		result = slave_descr->config(
+			slave_client->adapter, slave_descr,
+			slave_pdata, &config);
+		if (result) {
+			LOG_RESULT_LOCATION(result);
+			goto out_slavedescr_exit;
+		}
+	}
 	pdata_slave[slave_descr->type] = slave_pdata;
 	mpu->slave_modules[slave_descr->type] = slave_module;
 	mldl_cfg->slave[slave_descr->type] = slave_descr;
 
 	goto out_unlock_mutex;
 
+out_slavedescr_exit:
+	if (slave_descr->exit)
+		slave_descr->exit(slave_client->adapter,
+				  slave_descr, slave_pdata);
 out_unlock_mutex:
 	mutex_unlock(&mpu->mutex);
 
@@ -991,12 +1741,18 @@ out_unlock_mutex:
 			dev_WARN(&slave_client->adapter->dev,
 				"%s irq assigned error: %d\n",
 				slave_descr->name, warn_result);
-	} else {
-		dev_info(&slave_client->adapter->dev,
+	}
+#ifndef CONFIG_MACH_X3
+	/*                                        
+                                                    
+  */
+	else {
+		dev_WARN(&slave_client->adapter->dev,
 			"%s irq not assigned: %d %d %d\n",
 			slave_descr->name,
 			result, (int)irq_name, slave_pdata->irq);
 	}
+#endif
 
 	return result;
 }
@@ -1052,6 +1808,33 @@ static const struct i2c_device_id mpu_id[] = {
 };
 MODULE_DEVICE_TABLE(i2c, mpu_id);
 
+
+static int mpu_reboot_notify(struct notifier_block *nb,
+                                unsigned long event, void *data)
+{
+    switch (event) {
+    case SYS_RESTART:
+    case SYS_HALT:
+    case SYS_POWER_OFF:
+		{	
+			printk("%s \n",__func__);
+			mpu_is_shutdown = 1;
+			gpio_set_value(mpu_vdd_ldo_en, 0);
+			gpio_set_value(mpu_vlogic_ldo_en, 0);
+		}
+	    return NOTIFY_OK;
+    }
+    return NOTIFY_DONE;
+}
+
+
+static struct notifier_block mpu_reboot_nb = {
+	.notifier_call = mpu_reboot_notify,
+};
+
+
+
+
 int mpu_probe(struct i2c_client *client, const struct i2c_device_id *devid)
 {
 	struct mpu_platform_data *pdata;
@@ -1059,10 +1842,35 @@ int mpu_probe(struct i2c_client *client, const struct i2c_device_id *devid)
 	struct mldl_cfg *mldl_cfg;
 	int res = 0;
 	int ii = 0;
-	unsigned long irq_flags;
+        int ret = 0; 
 
 	dev_info(&client->adapter->dev, "%s: %d\n", __func__, ii++);
 
+#if defined(CONFIG_MACH_VU10)
+	mpu_vdd_ldo_en		= TEGRA_GPIO_PX7;
+	mpu_vlogic_ldo_en	= TEGRA_GPIO_PD2;
+#else
+	switch(x3_get_hw_rev_pcb_version())
+	{
+	case hw_rev_pcb_type_A :
+	case hw_rev_pcb_type_B :
+	case hw_rev_pcb_type_C :
+		mpu_vdd_ldo_en		= TEGRA_GPIO_PD0;
+		mpu_vlogic_ldo_en		= TEGRA_GPIO_PH6;
+		break;
+	case hw_rev_pcb_type_D :
+		mpu_vdd_ldo_en		= TEGRA_GPIO_PH2;
+		mpu_vlogic_ldo_en		= TEGRA_GPIO_PH6;
+		break;
+	case hw_rev_pcb_type_E :
+	case hw_rev_pcb_type_1_0 :
+	default:
+		mpu_vdd_ldo_en		= TEGRA_GPIO_PX7;
+		mpu_vlogic_ldo_en		= TEGRA_GPIO_PD2;
+		break;
+	}
+#endif
+	
 	if (!i2c_check_functionality(client->adapter, I2C_FUNC_I2C)) {
 		res = -ENODEV;
 		goto out_check_functionality_failed;
@@ -1090,6 +1898,65 @@ int mpu_probe(struct i2c_client *client, const struct i2c_device_id *devid)
 	mpu_private_data = mpu;
 	i2c_set_clientdata(client, mpu);
 	mpu->client = client;
+#if defined(CONFIG_MACH_VU10)
+	//                                                         
+	mpu_power_vdd_control(mpu, true);
+
+	//VDD rise time : <= 100msec.
+	//mdelay(100);
+
+	mpu_power_vlogic_control(mpu, true);
+
+	printk("[%s] LDO 1.8V : %d, LDO 3.0V : %d, Line[%d]\n",__func__, gpio_get_value(mpu_vlogic_ldo_en), gpio_get_value(mpu_vdd_ldo_en),__LINE__);
+
+	//VLOGIC rise time - VLOGIC <= 3msec.
+	mdelay(3);
+#else
+	if(x3_get_hw_rev_pcb_version() > hw_rev_pcb_type_C)
+	{
+		//                                                         
+		mpu_power_vdd_control(mpu, true);
+
+		//VDD rise time : <= 100msec.
+		//mdelay(100);
+		
+		mpu_power_vlogic_control(mpu, true);
+		
+		printk("[%s] LDO 1.8V : %d, LDO 3.0V : %d, Line[%d]\n",__func__, gpio_get_value(mpu_vlogic_ldo_en), gpio_get_value(mpu_vdd_ldo_en),__LINE__);	
+		
+		//VLOGIC rise time - VLOGIC <= 3msec.
+		mdelay(3); 	
+	}
+	else
+	{
+	//SENSOR_LDO_EN_2 pin Enable for VLOGIC 1.8V  ------------------------
+	
+	ret = gpio_request(mpu_vlogic_ldo_en, "SENSOR_LDO_EN_2");
+	if (ret < 0)
+	{
+		 printk("Sensor[1] : Fail to request Sensor LDO enabling\n");
+		 goto out_register_pm_notifier_failed;
+	}
+
+	ret=gpio_direction_output(mpu_vlogic_ldo_en, 0);
+	if (ret < 0)
+	{
+		 printk("Sensor[2] : Fail to direct Sensor LDO enabling\n");
+		 gpio_free(mpu_vlogic_ldo_en);
+		 goto out_register_pm_notifier_failed;
+	}				
+	tegra_gpio_enable(mpu_vlogic_ldo_en);
+	
+	
+	printk(" mpu6050 LDO 1.8V : %d, Line[%d]\n",	gpio_get_value(mpu_vlogic_ldo_en),__LINE__);	
+	gpio_set_value(mpu_vlogic_ldo_en,1);		// LDO ON.
+
+	}
+#endif
+
+#ifdef SENSOR_COMMON_LDO_CTRL
+	INIT_DELAYED_WORK(&mpu->dwork, mpu_work_handler);       
+#endif
 
 	init_waitqueue_head(&mpu->mpu_event_wait);
 	mutex_init(&mpu->mutex);
@@ -1137,22 +2004,54 @@ int mpu_probe(struct i2c_client *client, const struct i2c_device_id *devid)
 	}
 
 	if (client->irq) {
-		dev_info(&client->adapter->dev,
+                 dev_info(&client->adapter->dev,
 			 "Installing irq using %d\n", client->irq);
-		if (BIT_ACTL_LOW == ((mldl_cfg->pdata->int_config) & BIT_ACTL))
-			irq_flags = IRQF_TRIGGER_FALLING;
-		else
-			irq_flags = IRQF_TRIGGER_RISING;
-		res = mpuirq_init(client, mldl_cfg, irq_flags);
-
+		res = mpuirq_init(client, mldl_cfg);
 		if (res)
 			goto out_mpuirq_failed;
 	} else {
 		dev_WARN(&client->adapter->dev,
 			 "Missing %s IRQ\n", MPU_NAME);
 	}
+	if (!strcmp(mpu_id[1].name, devid->name)) {
+		/* Special case to re-use the inv_mpu_register_slave */
+		struct ext_slave_platform_data *slave_pdata;
+		slave_pdata = kzalloc(sizeof(*slave_pdata), GFP_KERNEL);
+		if (!slave_pdata) {
+			res = -ENOMEM;
+			goto out_slave_pdata_kzalloc_failed;
+		}
+		slave_pdata->bus = EXT_SLAVE_BUS_PRIMARY;
+		for (ii = 0; ii < 9; ii++)
+			slave_pdata->orientation[ii] = pdata->orientation[ii];
+		res = inv_mpu_register_slave(
+			NULL, client,
+			slave_pdata,
+			mpu6050_get_slave_descr);
+		if (res) {
+			/* if inv_mpu_register_slave fails there are no pointer
+			   references to the memory allocated to slave_pdata */
+			kfree(slave_pdata);
+			goto out_slave_pdata_kzalloc_failed;
+		}
+	}
+
+#ifdef FEATURE_MPU_SYSFS
+  mpu_sysfs_init(&mpu->dev, mpu);
+#endif //FEATURE_MPU_SYSFS
+
+  	register_reboot_notifier(&mpu_reboot_nb);
+
+	printk("-----------------------------\n");
+	printk("MPU DEVICE Initialized!!!!\n");
+	printk("-----------------------------\n");
+
+
 	return res;
 
+out_slave_pdata_kzalloc_failed:
+	if (client->irq)
+		mpuirq_exit();
 out_mpuirq_failed:
 	misc_deregister(&mpu->dev);
 out_misc_register_failed:
@@ -1160,6 +2059,27 @@ out_misc_register_failed:
 out_whoami_failed:
 	unregister_pm_notifier(&mpu->nb);
 out_register_pm_notifier_failed:
+#if defined(CONFIG_MACH_VU10)
+	mpu_power_vlogic_control(mpu, false);
+	if (mpu->mpu_vlogic_reg)
+		regulator_put(mpu->mpu_vlogic_reg);
+
+	mpu_power_vdd_control(mpu, false);
+	if (mpu->mpu_vdd_reg)
+		regulator_put(mpu->mpu_vdd_reg);
+#else
+	if(x3_get_hw_rev_pcb_version() > hw_rev_pcb_type_C)
+	{
+
+        mpu_power_vlogic_control(mpu, false);
+        if (mpu->mpu_vlogic_reg)
+                regulator_put(mpu->mpu_vlogic_reg);
+
+        mpu_power_vdd_control(mpu, false);
+        if (mpu->mpu_vdd_reg)
+                regulator_put(mpu->mpu_vdd_reg);
+	}
+#endif
 	kfree(mldl_cfg->mpu_ram->ram);
 	mpu_private_data = NULL;
 out_alloc_ram_failed:
@@ -1196,6 +2116,17 @@ static int mpu_remove(struct i2c_client *client)
 		slave_adapter[EXT_SLAVE_TYPE_COMPASS],
 		slave_adapter[EXT_SLAVE_TYPE_PRESSURE]);
 
+	if (mldl_cfg->slave[EXT_SLAVE_TYPE_ACCEL] &&
+		(mldl_cfg->slave[EXT_SLAVE_TYPE_ACCEL]->id ==
+			ACCEL_ID_MPU6050)) {
+		struct ext_slave_platform_data *slave_pdata =
+			mldl_cfg->pdata_slave[EXT_SLAVE_TYPE_ACCEL];
+		inv_mpu_unregister_slave(
+			client,
+			mldl_cfg->pdata_slave[EXT_SLAVE_TYPE_ACCEL],
+			mpu6050_get_slave_descr);
+		kfree(slave_pdata);
+	}
 
 	if (client->irq)
 		mpuirq_exit();
@@ -1203,7 +2134,26 @@ static int mpu_remove(struct i2c_client *client)
 	misc_deregister(&mpu->dev);
 
 	unregister_pm_notifier(&mpu->nb);
+#if defined(CONFIG_MACH_VU10)
+	mpu_power_vlogic_control(mpu, false);
+	if (mpu->mpu_vlogic_reg)
+		regulator_put(mpu->mpu_vlogic_reg);
 
+	mpu_power_vdd_control(mpu, false);
+	if (mpu->mpu_vdd_reg)
+		regulator_put(mpu->mpu_vdd_reg);
+#else
+	if(x3_get_hw_rev_pcb_version() > hw_rev_pcb_type_C)
+	{
+        mpu_power_vlogic_control(mpu, false);
+        if (mpu->mpu_vlogic_reg)
+                regulator_put(mpu->mpu_vlogic_reg);
+
+        mpu_power_vdd_control(mpu, false);
+        if (mpu->mpu_vdd_reg)
+                regulator_put(mpu->mpu_vdd_reg);
+	}
+#endif
 	kfree(mpu->mldl_cfg.mpu_ram->ram);
 	kfree(mpu);
 

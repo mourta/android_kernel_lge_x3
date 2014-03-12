@@ -1697,6 +1697,7 @@ long do_io_submit(aio_context_t ctx_id, long nr,
 	long ret = 0;
 	int i = 0;
 	struct kiocb_batch batch;
+	struct blk_plug plug;
 
 	if (unlikely(nr < 0))
 		return -EINVAL;
@@ -1714,6 +1715,7 @@ long do_io_submit(aio_context_t ctx_id, long nr,
 	}
 
 	kiocb_batch_init(&batch, nr);
+	blk_start_plug(&plug);
 
 	/*
 	 * AKPM: should this return a partial result if some of the IOs were

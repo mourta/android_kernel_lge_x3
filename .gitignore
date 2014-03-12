@@ -32,9 +32,9 @@ modules.builtin
 *.lzo
 *.patch
 *.gcno
-*.sh
 *.xzkern
 ashldi3.S
+piggy.xzkern
 
 #
 # Top-level generic files
@@ -87,3 +87,6 @@ GTAGS
 *.orig
 *~
 \#*#
+
+# build script
+out

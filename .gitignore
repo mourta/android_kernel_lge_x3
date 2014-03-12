@@ -34,7 +34,6 @@ modules.builtin
 *.gcno
 *.xzkern
 ashldi3.S
-piggy.xzkern
 
 #
 # Top-level generic files

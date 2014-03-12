@@ -409,4 +409,7 @@ void x3_usb_init(void)
 	tegra_otg_device.dev.platform_data = &tegra_otg_pdata;
 	platform_device_register(&tegra_otg_device);
 
+	/* This is for USB wakeup */
+	enable_irq_wake(INT_USB);
+
 }

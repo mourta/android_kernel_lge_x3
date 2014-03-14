@@ -228,6 +228,13 @@ static void tegra_change_otg_state(struct tegra_otg_data *tegra,
 				tegra_otg_notify_event(otg, USB_EVENT_NONE);
 			}
 		}
+		/*
+		    USB_VBUS_STATUS	(1 << 10)
+		    usb_vbus_val = 0, VBUS disable.
+		    usb_vbus_val = 1024, VBUS enable.
+		*/
+	} else if ((from == OTG_STATE_A_SUSPEND) && (to == OTG_STATE_A_SUSPEND) && (usb_vbus_val == 1024)) {
+		usb_vbus_val = otg_readl(tegra, USB_PHY_WAKEUP) & USB_VBUS_STATUS;
 	}
 }
 
@@ -305,7 +312,10 @@ static int tegra_otg_set_peripheral(struct otg_transceiver *otg,
 	tegra = container_of(otg, struct tegra_otg_data, otg);
 	otg->gadget = gadget;
 
+	msleep(10);
+
 	val = enable_interrupt(tegra, true);
+	val &= ~(USB_ID_INT_STATUS | USB_VBUS_INT_STATUS);
 
 	if ((val & USB_ID_STATUS) && (val & USB_VBUS_STATUS))
 		val |= USB_VBUS_INT_STATUS;
@@ -340,7 +350,7 @@ static int tegra_otg_set_host(struct otg_transceiver *otg,
 	clk_enable(tegra->clk);
 	val = otg_readl(tegra, USB_PHY_WAKEUP);
 	val &= ~(USB_VBUS_INT_STATUS | USB_ID_INT_STATUS);
-	val |= (USB_ID_INT_EN | USB_ID_PIN_WAKEUP_EN);
+	val |= USB_INT_EN;
 	otg_writel(tegra, val, USB_PHY_WAKEUP);
 	clk_disable(tegra->clk);
 
@@ -542,11 +552,14 @@ static int tegra_otg_suspend(struct device *dev)
 	otg_writel(tegra, val, USB_PHY_WAKEUP);
 	clk_disable(tegra->clk);
 
+	usb_suspend_tag = true;
+
 	/* Suspend peripheral mode, host mode is taken care by host driver */
 	if (otg->state == OTG_STATE_B_PERIPHERAL)
 		tegra_change_otg_state(tegra, OTG_STATE_A_SUSPEND);
 
 	tegra->suspended = true;
+	usb_vbus_val = otg_readl(tegra, USB_PHY_WAKEUP) & USB_VBUS_STATUS;
 
 	DBG("%s(%d) END\n", __func__, __LINE__);
 	mutex_unlock(&tegra->irq_work_mutex);
@@ -581,6 +594,11 @@ static void tegra_otg_resume(struct device *dev)
 	else
 		tegra->int_status = val | USB_VBUS_INT_EN | USB_VBUS_WAKEUP_EN |
 			USB_ID_PIN_WAKEUP_EN;
+
+	if (!(tegra->int_status & USB_ID_STATUS))
+		tegra->int_status = (tegra->int_status | USB_ID_INT_STATUS);
+
+	usb_suspend_tag = false;
 
 	spin_unlock_irqrestore(&tegra->lock, flags);
 	schedule_work(&tegra->work);

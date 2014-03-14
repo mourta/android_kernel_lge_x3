@@ -49,6 +49,9 @@
 #define DBG(stuff...)	do {} while (0)
 #endif
 
+typedef void (*callback_t)(enum usb_otg_state to,
+				enum usb_otg_state from, void *args);
+
 struct tegra_otg_data {
 	struct otg_transceiver otg;
 	unsigned long int_status;
@@ -64,6 +67,8 @@ struct tegra_otg_data {
 	bool interrupt_mode;
 	bool builtin_host;
 	bool suspended;
+	callback_t	charger_cb;
+	void	*charger_cb_data;
 };
 
 static struct tegra_otg_data *tegra_clone;
@@ -237,6 +242,16 @@ static void tegra_change_otg_state(struct tegra_otg_data *tegra,
 		usb_vbus_val = otg_readl(tegra, USB_PHY_WAKEUP) & USB_VBUS_STATUS;
 	}
 }
+
+int register_otg_callback(callback_t cb, void *args)
+{
+	if (!tegra_clone)
+		return -ENODEV;
+	tegra_clone->charger_cb = cb;
+	tegra_clone->charger_cb_data = args;
+	return 0;
+}
+EXPORT_SYMBOL_GPL(register_otg_callback);
 
 static void irq_work(struct work_struct *work)
 {

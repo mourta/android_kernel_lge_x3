@@ -648,7 +648,6 @@ static int tegra_ep_disable(struct usb_ep *_ep)
 	/* nuke all pending requests (does flush) */
 	nuke(ep, -ESHUTDOWN);
 
-	_ep->desc = NULL;
 	ep->desc = NULL;
 	ep->stopped = 1;
 	if (ep->last_td) {

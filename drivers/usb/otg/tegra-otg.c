@@ -51,6 +51,7 @@
 
 typedef void (*callback_t)(enum usb_otg_state to,
 				enum usb_otg_state from, void *args);
+unsigned int usb_vbus_val = 0x0;
 
 struct tegra_otg_data {
 	struct otg_transceiver otg;

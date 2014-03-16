@@ -1540,6 +1540,8 @@ static bool _tegra_dc_controller_enable(struct tegra_dc *dc)
 	if (dc->out->enable)
 		dc->out->enable();
 
+	dev_dbg(&dc->ndev->dev, "_tegra_dc_controller_enable");
+
 	tegra_dc_setup_clk(dc, dc->clk);
 	tegra_dc_clk_enable(dc);
 
@@ -1585,6 +1587,8 @@ static bool _tegra_dc_controller_reset_enable(struct tegra_dc *dc)
 
 	if (dc->out->enable)
 		dc->out->enable();
+
+	dev_dbg(&dc->ndev->dev, "_tegra_dc_controller_reset_enable");
 
 	tegra_dc_setup_clk(dc, dc->clk);
 	tegra_dc_clk_enable(dc);
@@ -1671,6 +1675,8 @@ static int _tegra_dc_set_default_videomode(struct tegra_dc *dc)
 
 static bool _tegra_dc_enable(struct tegra_dc *dc)
 {
+	dev_dbg(&dc->ndev->dev, "_tegra_dc_enable");
+
 	if (dc->mode.pclk == 0)
 		return false;
 
@@ -1690,6 +1696,7 @@ void tegra_dc_enable(struct tegra_dc *dc)
 {
 	mutex_lock(&dc->lock);
 
+	dev_dbg(&dc->ndev->dev, "tegra_dc_enable");
 	if (!dc->enabled)
 		dc->enabled = _tegra_dc_enable(dc);
 
@@ -1700,6 +1707,7 @@ void tegra_dc_enable(struct tegra_dc *dc)
 static void _tegra_dc_controller_disable(struct tegra_dc *dc)
 {
 	unsigned i;
+	dev_dbg(&dc->ndev->dev, "_tegra_dc_controller_disable");
 
 	if (dc->out && dc->out->prepoweroff)
 		dc->out->prepoweroff();
@@ -1791,6 +1799,7 @@ void tegra_dc_blank(struct tegra_dc *dc)
 	struct tegra_dc_win *dcwins[DC_N_WINDOWS];
 	unsigned i;
 
+	dev_dbg(&dc->ndev->dev, "tegra_dc_blank");
 	for (i = 0; i < DC_N_WINDOWS; i++) {
 		dcwins[i] = tegra_dc_get_window(dc, i);
 		dcwins[i]->flags &= ~TEGRA_WIN_FLAG_ENABLED;
@@ -1802,6 +1811,7 @@ void tegra_dc_blank(struct tegra_dc *dc)
 
 static void _tegra_dc_disable(struct tegra_dc *dc)
 {
+	dev_dbg(&dc->ndev->dev, "_tegra_dc_disable");
 	if (dc->out->flags & TEGRA_DC_OUT_ONE_SHOT_MODE) {
 		mutex_lock(&dc->one_shot_lock);
 		cancel_delayed_work_sync(&dc->one_shot_work);
@@ -1820,6 +1830,7 @@ static void _tegra_dc_disable(struct tegra_dc *dc)
 
 void tegra_dc_disable(struct tegra_dc *dc)
 {
+	dev_dbg(&dc->ndev->dev, "tegra_dc_disable");
 	tegra_dc_ext_disable(dc->ext);
 
 	/* it's important that new underflow work isn't scheduled before the
@@ -2147,6 +2158,7 @@ err_free:
 static int tegra_dc_remove(struct nvhost_device *ndev)
 {
 	struct tegra_dc *dc = nvhost_get_drvdata(ndev);
+	dev_dbg(&dc->ndev->dev, "tegra_dc_remove");
 
 	tegra_dc_remove_sysfs(&dc->ndev->dev);
 	tegra_dc_remove_debugfs(dc);
@@ -2180,9 +2192,10 @@ static int tegra_dc_remove(struct nvhost_device *ndev)
 }
 
 #ifdef CONFIG_PM
-static int tegra_dc_suspend(struct nvhost_device *ndev, pm_message_t state)
+int tegra_dc_suspend(struct nvhost_device *ndev, pm_message_t state)
 {
 	struct tegra_dc *dc = nvhost_get_drvdata(ndev);
+	dev_dbg(&dc->ndev->dev, "tegra_dc_suspend");
 
 	trace_printk("%s:suspend\n", dc->ndev->name);
 	dev_info(&ndev->dev, "suspend\n");
@@ -2214,9 +2227,10 @@ static int tegra_dc_suspend(struct nvhost_device *ndev, pm_message_t state)
 	return 0;
 }
 
-static int tegra_dc_resume(struct nvhost_device *ndev)
+int tegra_dc_resume(struct nvhost_device *ndev)
 {
 	struct tegra_dc *dc = nvhost_get_drvdata(ndev);
+	dev_dbg(&dc->ndev->dev, "tegra_dc_resume");
 
 	trace_printk("%s:resume\n", dc->ndev->name);
 	dev_info(&ndev->dev, "resume\n");
@@ -2250,6 +2264,7 @@ static void tegra_dc_shutdown(struct nvhost_device *ndev)
 
 	if (!dc || !dc->enabled)
 		return;
+	dev_dbg(&dc->ndev->dev, "tegra_dc_shutdown");
 
 	tegra_dc_blank(dc);
 	tegra_dc_disable(dc);
@@ -2257,12 +2272,17 @@ static void tegra_dc_shutdown(struct nvhost_device *ndev)
 
 extern int suspend_set(const char *val, struct kernel_param *kp)
 {
+	dev_dbg(&tegra_dcs[0]->ndev->dev, "suspend_set");
+#ifdef CONFIG_PM
+	dev_dbg(&tegra_dcs[0]->ndev->dev, "suspend_set - CONFIG_PM");
+#endif
 	if (!strcmp(val, "dump"))
 		dump_regs(tegra_dcs[0]);
 #ifdef CONFIG_PM
-	else if (!strcmp(val, "suspend"))
+	else if (!strncmp(val, "suspend", 7)) {
 		tegra_dc_suspend(tegra_dcs[0]->ndev, PMSG_SUSPEND);
-	else if (!strcmp(val, "resume"))
+	}
+	else if (!strncmp(val, "resume", 6))
 		tegra_dc_resume(tegra_dcs[0]->ndev);
 #endif
 

@@ -1,7 +1,7 @@
 /*
  * arch/arm/mach-tegra/tegra3_usb_phy.c
  *
- * Copyright (c) 2012, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2013, NVIDIA CORPORATION.  All rights reserved.
  *
  *
  * This software is licensed under the terms of the GNU General Public
@@ -1242,7 +1242,8 @@ static int utmi_phy_irq(struct tegra_usb_phy *phy)
 
 	if (phy->pdata->u_data.host.hot_plug) {
 		val = readl(base + USB_SUSP_CTRL);
-		if ((val  & USB_PHY_CLK_VALID_INT_STS)) {
+		if ((val  & USB_PHY_CLK_VALID_INT_STS) &&
+		    (val  & USB_PHY_CLK_VALID_INT_ENB)) {
 			val &= ~USB_PHY_CLK_VALID_INT_ENB |
 					USB_PHY_CLK_VALID_INT_STS;
 			writel(val , (base + USB_SUSP_CTRL));
@@ -1458,6 +1459,10 @@ static int utmi_phy_power_off(struct tegra_usb_phy *phy)
 			pr_err("%s: timeout waiting for USB_USBSTS_HCH\n", __func__);
 		}
 		utmip_setup_pmc_wake_detect(phy);
+
+		val = readl(base + USB_SUSP_CTRL);
+		val &= ~USB_WAKE_ON_CNNT_EN_DEV;
+		writel(val, base + USB_SUSP_CTRL);
 	}
 
 	if (!phy->pdata->u_data.host.hot_plug) {
@@ -1495,8 +1500,13 @@ static int utmi_phy_power_off(struct tegra_usb_phy *phy)
 				val |= USB_PORTSC_WKCN;
 			writel(val, base + USB_PORTSC);
 
-			val = readl(base + USB_SUSP_CTRL);
-			val |= USB_PHY_CLK_VALID_INT_ENB;
+			if (val & USB_PORTSC_CCS) {
+				val = readl(base + USB_SUSP_CTRL);
+				val &= ~USB_PHY_CLK_VALID_INT_ENB;
+			} else {
+				val = readl(base + USB_SUSP_CTRL);
+				val |= USB_PHY_CLK_VALID_INT_ENB;
+			}
 			writel(val, base + USB_SUSP_CTRL);
 		} else {
 			/* Disable PHY clock valid interrupts while going into suspend*/
@@ -1727,14 +1737,21 @@ static int utmi_phy_resume(struct tegra_usb_phy *phy)
 	int status = 0;
 	unsigned long val;
 	void __iomem *base = phy->regs;
+	int port_connected = 0;
 
 	DBG("%s(%d) inst:[%d]\n", __func__, __LINE__, phy->inst);
 	if (phy->pdata->op_mode == TEGRA_USB_OPMODE_HOST) {
-		if (phy->port_speed < USB_PHY_PORT_SPEED_UNKNOWN) {
+		val = readl(base + USB_PORTSC);
+		port_connected = val & USB_PORTSC_CCS;
+
+		if ((phy->port_speed < USB_PHY_PORT_SPEED_UNKNOWN) &&
+			port_connected) {
 			utmi_phy_restore_start(phy);
 			usb_phy_bringup_host_controller(phy);
 			utmi_phy_restore_end(phy);
 		} else {
+			utmip_phy_disable_pmc_bus_ctrl(phy);
+
 			/* device is plugged in when system is in LP0 */
 			/* bring up the controller from LP0*/
 			val = readl(base + USB_USBCMD);
@@ -1972,16 +1989,9 @@ static void uhsic_setup_pmc_wake_detect(struct tegra_usb_phy *phy)
 	val |= UHSIC_MASTER_ENABLE;
 	writel(val, pmc_base + PMC_SLEEP_CFG);
 
-#if 0 /*                                      */
 	val = readl(base + UHSIC_PMC_WAKEUP0);
 	val |= EVENT_INT_ENB;
 	writel(val, base + UHSIC_PMC_WAKEUP0);
-#else
-	val = readl(base + UHSIC_PMC_WAKEUP0);
-	val &= ~EVENT_INT_ENB;
-	writel(val, base + UHSIC_PMC_WAKEUP0);
-
-#endif
 
 	DBG("%s:PMC enabled for HSIC remote wakeup\n", __func__);
 }
@@ -2083,7 +2093,6 @@ static void uhsic_phy_restore_start(struct tegra_usb_phy *phy)
 	val = readl(pmc_base + UTMIP_UHSIC_STATUS);
 
 	/* check whether we wake up from the remote resume */
-#if 0 //NV Patch (1175097) - [X3/AP33/JB/USB-HSIC] reproduce USB protocol error (-71) [START]
 	if (UHSIC_WALK_PTR_VAL & val) {
 		phy->remote_wakeup = true;
 	} else {
@@ -2092,12 +2101,6 @@ static void uhsic_phy_restore_start(struct tegra_usb_phy *phy)
 		val |= UHSIC_PRETEND_CONNECT_DETECT;
 		writel(val, base + UHSIC_CMD_CFG0);
 	}
-#else
-		DBG("%s(%d): setting pretend connect\n", __func__, __LINE__);
-		val = readl(base + UHSIC_CMD_CFG0);
-		val |= UHSIC_PRETEND_CONNECT_DETECT;
-		writel(val, base + UHSIC_CMD_CFG0);
-#endif //NV Patch (1175097) - [X3/AP33/JB/USB-HSIC] reproduce USB protocol error (-71) [END]
 }
 
 static void uhsic_phy_restore_end(struct tegra_usb_phy *phy)
@@ -2605,9 +2608,7 @@ static inline void ulpi_null_phy_set_tristate(bool enable)
 	tegra_pinmux_set_tristate(TEGRA_PINGROUP_ULPI_DATA6, tristate);
 	tegra_pinmux_set_tristate(TEGRA_PINGROUP_ULPI_DATA7, tristate);
 	tegra_pinmux_set_tristate(TEGRA_PINGROUP_ULPI_NXT, tristate);
-
-	if (enable)
-		tegra_pinmux_set_tristate(TEGRA_PINGROUP_ULPI_DIR, tristate);
+	tegra_pinmux_set_tristate(TEGRA_PINGROUP_ULPI_DIR, tristate);
 #endif
 }
 
@@ -2802,6 +2803,7 @@ static int ulpi_null_phy_restore(struct tegra_usb_phy *phy)
 			pr_warn("phy restore timeout\n");
 			return 1;
 		}
+		mdelay(1);
 	}
 
 	return 0;
@@ -2982,11 +2984,6 @@ static int ulpi_null_phy_resume(struct tegra_usb_phy *phy)
 		/* enable ULPI pinmux bypass */
 		ulpi_pinmux_bypass(phy, true);
 		udelay(5);
-#ifndef CONFIG_ARCH_TEGRA_2x_SOC
-		/* remove DIR tristate */
-		tegra_pinmux_set_tristate(TEGRA_PINGROUP_ULPI_DIR,
-					  TEGRA_TRI_NORMAL);
-#endif
 	}
 	return 0;
 }

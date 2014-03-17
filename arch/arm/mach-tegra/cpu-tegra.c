@@ -811,9 +811,6 @@ int tegra_update_cpu_speed(unsigned long rate)
 		pr_err("[cpufreq] can not nice(-20)!!");
 	}
 
-	CPU_DEBUG_PRINTK(CPU_DEBUG_HOTPLUG,
-			" leave LPCPU (%s)", __func__);
-
 	/* set rate to max of LP mode */
 	ret = clk_set_rate(cpu_clk, 475000 * 1000);
 	/* change to g mode */
@@ -835,13 +832,13 @@ int tegra_update_cpu_speed(unsigned long rate)
 		if (ret) {
 			pr_err("cpu-tegra: Failed to scale mselect for cpu"
 			       " frequency %u kHz\n", freqs.new);
-			return ret;
+				goto error;
 		}
 		ret = clk_set_rate(emc_clk, tegra_emc_to_cpu_ratio(freqs.new));
 		if (ret) {
 			pr_err("cpu-tegra: Failed to scale emc for cpu"
 			       " frequency %u kHz\n", freqs.new);
-			return ret;
+				goto error;
 		}
 	}
 
@@ -857,7 +854,7 @@ int tegra_update_cpu_speed(unsigned long rate)
 	if (ret) {
 		pr_err("cpu-tegra: Failed to set cpu frequency to %d kHz\n",
 			freqs.new);
-		return ret;
+			goto error;
 	}
 
 	for_each_online_cpu(freqs.cpu)
@@ -878,7 +875,7 @@ error:
 		}
 	}
 
-	return 0;
+		return ret;
 }
 
 unsigned int tegra_count_slow_cpus(unsigned long speed_limit)

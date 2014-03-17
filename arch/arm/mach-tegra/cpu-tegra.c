@@ -61,6 +61,7 @@ unsigned int power_mode_table[SYSTEM_MODE_END] = {1000000,1200000,1400000};
 static struct cpufreq_frequency_table *freq_table;
 static unsigned int freq_table_size=0;;
 static struct clk *cpu_clk;
+static struct clk *cpu_g_clk;
 static struct clk *emc_clk;
 static struct clk *cpu_lp_clk;
 
@@ -1110,6 +1111,7 @@ static int tegra_cpu_init(struct cpufreq_policy *policy)
 		return -EINVAL;
 
 	cpu_clk = clk_get_sys(NULL, "cpu");
+	cpu_g_clk = clk_get_sys(NULL, "cpu_g");
 	if (IS_ERR(cpu_clk))
 		return PTR_ERR(cpu_clk);
 

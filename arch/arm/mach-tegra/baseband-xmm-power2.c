@@ -1,7 +1,7 @@
 /*
  * arch/arm/mach-tegra/baseband-xmm-power2.c
  *
- * Copyright (C) 2011-2013, NVIDIA Corporation. All Rights Reserved.
+ * Copyright (C) 2011 NVIDIA Corporation
  *
  * This software is licensed under the terms of the GNU General Public
  * License version 2, as published by the Free Software Foundation, and
@@ -49,13 +49,24 @@ MODULE_PARM_DESC(XYZ,
 
 static struct workqueue_struct *workqueue;
 static bool free_ipc_ap_wake_irq;
-static enum ipc_ap_wake_state_t ipc_ap_wake_state;
+
+static enum {
+	IPC_AP_WAKE_UNINIT,
+	IPC_AP_WAKE_IRQ_READY,
+	IPC_AP_WAKE_INIT1,
+	IPC_AP_WAKE_INIT2,
+	IPC_AP_WAKE_L,
+	IPC_AP_WAKE_H,
+} ipc_ap_wake_state;
+
 
 static irqreturn_t xmm_power2_ipc_ap_wake_irq(int irq, void *dev_id)
 {
 	int value;
 	struct xmm_power_data *data = dev_id;
 	struct baseband_power_platform_data *pdata = data->pdata;
+
+	pr_debug("%s\n", __func__);
 
 	/* check for platform data */
 	if (!pdata)
@@ -68,8 +79,8 @@ static irqreturn_t xmm_power2_ipc_ap_wake_irq(int irq, void *dev_id)
 		pr_err("%s - spurious irq\n", __func__);
 	else if (ipc_ap_wake_state == IPC_AP_WAKE_IRQ_READY) {
 		if (!value) {
-			pr_debug("%s: IPC_AP_WAKE_IRQ_READY got falling edge\n",
-						__func__);
+			pr_debug("%s: IPC_AP_WAKE_INIT1 got falling edge\n",
+				__func__);
 			/* go to IPC_AP_WAKE_INIT2 state */
 			ipc_ap_wake_state = IPC_AP_WAKE_INIT2;
 			/* queue work */
@@ -77,7 +88,7 @@ static irqreturn_t xmm_power2_ipc_ap_wake_irq(int irq, void *dev_id)
 				BBXMM_WORK_INIT_FLASHLESS_PM_STEP2;
 			queue_work(workqueue, &data->work);
 		} else
-			pr_debug("%s: IPC_AP_WAKE_IRQ_READY"
+			pr_debug("%s: IPC_AP_WAKE_INIT1"
 				" wait for falling edge\n", __func__);
 	} else {
 		if (!value) {
@@ -87,7 +98,7 @@ static irqreturn_t xmm_power2_ipc_ap_wake_irq(int irq, void *dev_id)
 			pr_debug("%s - rising\n", __func__);
 			ipc_ap_wake_state = IPC_AP_WAKE_H;
 		}
-		return xmm_power_ipc_ap_wake_irq(value);
+		return xmm_power_ipc_ap_wake_irq(irq, dev_id);
 	}
 
 	return IRQ_HANDLED;
@@ -108,7 +119,7 @@ static void xmm_power2_step1(struct work_struct *work)
 
 	/* unregister usb host controller */
 	if (pdata->hsic_unregister)
-		pdata->hsic_unregister(&data->hsic_device);
+		pdata->hsic_unregister(data->hsic_device);
 	else
 		pr_err("%s: hsic_unregister is missing\n", __func__);
 
@@ -132,12 +143,16 @@ static void xmm_power2_step2(struct work_struct *work)
 
 	pr_info("%s {\n", __func__);
 
+	/* check for platform data */
+	if (!data || !pdata)
+		return;
+
 	/* wait Y ms */
 	msleep(Y);
 
 	/* register usb host controller */
 	if (pdata->hsic_register)
-		data->hsic_device = pdata->hsic_register(pdata->ehci_device);
+		data->hsic_device = pdata->hsic_register();
 	else
 		pr_err("%s: hsic_register is missing\n", __func__);
 
@@ -164,6 +179,10 @@ static void xmm_power2_step3(struct work_struct *work)
 	struct file *filp;
 
 	pr_info("%s {\n", __func__);
+
+	/* check for platform data */
+	if (!data || !pdata)
+		return;
 
 	/* wait 1 sec */
 	msleep(1000);
@@ -254,12 +273,8 @@ static void xmm_power2_work_func(struct work_struct *work)
 {
 	struct xmm_power_data *data =
 			container_of(work, struct xmm_power_data, work);
-	struct baseband_power_platform_data *pdata;
+	struct baseband_power_platform_data *pdata = data->pdata;
 	int err;
-
-	if (!data || !data->pdata)
-		return;
-	pdata = data->pdata;
 
 	pr_debug("%s pdata->state=%d\n", __func__, data->state);
 

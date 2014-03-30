@@ -24,9 +24,7 @@
 #include <linux/clk.h>
 #include <linux/io.h>
 #include <linux/uaccess.h>
-#include <linux/delay.h>
-#include <linux/cpufreq.h>
-#include <linux/pm_qos_params.h>  //                                                                                          
+#include <linux/delay.h>                                                                                      
 #include <mach/iomap.h>
 #include <mach/clk.h>
 #include <mach/powergate.h>
@@ -51,14 +49,7 @@ struct tegra_camera_dev {
 	struct tegra_camera_clk_info info;
 	struct mutex tegra_camera_lock;
 	atomic_t in_use;
-	int power_on;
-
-	bool power_save;
-	bool power_save_preview;
-	bool power_save_rec;
-	int xres;  //                                                                                          
-	int yres;  //                                                                                          
-	
+	int power_on;                               	
 };
 
 struct tegra_camera_block {
@@ -66,8 +57,7 @@ struct tegra_camera_block {
 	int (*disable) (struct tegra_camera_dev *dev);
 	bool is_enabled;
 };
-
-//                                                                                          
+                                                                             
 static struct tegra_camera_dev *tegra_camera_dev;
 
 /*
@@ -130,9 +120,7 @@ static int tegra_camera_enable_emc(struct tegra_camera_dev *dev)
 	int ret = tegra_emc_disable_eack();
 	clk_enable(dev->emc_clk);
 #ifdef CONFIG_ARCH_TEGRA_2x_SOC
-	clk_set_rate(dev->emc_clk, 300000000);
-#else
-	clk_set_rate(dev->emc_clk, 533000000);  //                                                                                   
+	clk_set_rate(dev->emc_clk, 300000000);                                                                  
 #endif
 	return ret;
 }
@@ -420,6 +408,25 @@ static const struct file_operations tegra_camera_fops = {
 	.release = tegra_camera_release,
 };
 
+int tegra_camera_mclk_on_off(int on)
+{
+    if (!tegra_camera_dev) return -1;
+
+    if (on){
+        printk("camera mclock on\n");
+        clk_set_rate(tegra_camera_dev->csus_clk, 6000000);
+        clk_set_rate(tegra_camera_dev->vi_sensor_clk, 24000000);
+        clk_enable(tegra_camera_dev->csus_clk);
+        clk_enable(tegra_camera_dev->vi_sensor_clk);
+    }
+    else{
+        clk_disable(tegra_camera_dev->vi_sensor_clk);
+        clk_disable(tegra_camera_dev->csus_clk);
+    }
+printk("-%s\n",__FUNCTION__);
+    return 0;
+}
+
 static int tegra_camera_clk_get(struct platform_device *pdev, const char *name,
 				struct clk **clk)
 {
@@ -433,180 +440,7 @@ static int tegra_camera_clk_get(struct platform_device *pdev, const char *name,
 	return 0;
 }
 
-//                                                                                          
-//#define POWER_SAVE_REC_CPU_USER_CAP_RATE	640000
-#define POWER_SAVE_BOOST_STEP			1
-#define POWER_SAVE_CPU_FREQ_MIN			640000
-#define POWER_SAVE_CPU_FREQ_MAX			640000
-#ifndef CONFIG_CPUQUIET_FRAMEWORK
-#define POWER_SAVE_MIN_CPUS			2
-#define POWER_SAVE_MAX_CPUS			2
-#endif
-//                                                                                          
-static unsigned long boost_step_default;
 
-static inline void tegra_camera_do_power_save(struct tegra_camera_dev *dev)
-{
-	int preview, rec;
-	
-    pr_info("%s \n", __func__);
-
-	preview = dev->power_save_preview;
-	rec = dev->power_save_rec;
-
-	if (!dev->power_save && (preview || rec)) {
-		boost_step_default = cpufreq_interactive_get_boost_step();
-		dev->power_save = true;
-	}
-
-	if (!dev->power_save)
-		return;
-
-	if (preview && rec) {    
-    pr_info("%s : when preview && rec \n", __func__);
-		cpufreq_interactive_set_boost_step(POWER_SAVE_BOOST_STEP);
-//                                                                                          
-		//                                                                      
-		cpufreq_set_max_freq(NULL, POWER_SAVE_CPU_FREQ_MAX);
-		if ((dev->xres == 1280 && dev->yres == 720) ||
-			(dev->xres == 1440 && dev->yres == 1080) ||
-				(dev->xres == 1920 && dev->yres == 1080)) {
-			cpufreq_set_min_freq(NULL, POWER_SAVE_CPU_FREQ_MIN);
-#ifndef CONFIG_CPUQUIET_FRAMEWORK
-			tegra_auto_hotplug_set_min_cpus(POWER_SAVE_MIN_CPUS);		// must be disabled when using cpuquiet
-			tegra_auto_hotplug_set_max_cpus(POWER_SAVE_MAX_CPUS);		// must be disabled when using cpuquiet
-#endif
-		}
-//                                                                                          
-	} else if (preview && !rec) {
-	  pr_info("%s : preview && !rec \n", __func__);
-		cpufreq_interactive_set_boost_step(POWER_SAVE_BOOST_STEP);
-//                                                                                          
-		#if 0 //kwanghee.choi 20120912 Vu1.0 Global fix the frame drop on Camera by setting full CPU clock(start)
-		cpufreq_set_min_freq(NULL, POWER_SAVE_CPU_FREQ_MIN);
-		cpufreq_set_max_freq(NULL, PM_QOS_CPU_FREQ_MAX_DEFAULT_VALUE);
-#ifndef CONFIG_CPUQUIET_FRAMEWORK
-		tegra_auto_hotplug_set_min_cpus(0);		// must be disabled when using cpuquiet
-		tegra_auto_hotplug_set_max_cpus(0);		// must be disabled when using cpuquiet
-#endif
-		#else
-		cpufreq_set_min_freq(NULL, PM_QOS_CPU_FREQ_MIN_DEFAULT_VALUE);
-		cpufreq_set_max_freq(NULL, PM_QOS_CPU_FREQ_MAX_DEFAULT_VALUE);
-#ifndef CONFIG_CPUQUIET_FRAMEWORK
-		tegra_auto_hotplug_set_min_cpus(0);		// must be disabled when using cpuquiet
-		tegra_auto_hotplug_set_max_cpus(0);		// must be disabled when using cpuquiet
-#endif
-		#endif //kwanghee.choi 20120912 Vu1.0 Global fix the frame drop on Camera by setting full CPU clock(end)
-//                                                                                          
-	} else if (!preview && !rec) {
-	  pr_info("%s : !preview && !rec \n", __func__);
-		cpufreq_interactive_set_boost_step(boost_step_default);
-//                                                                                          
-		cpufreq_set_min_freq(NULL, PM_QOS_CPU_FREQ_MIN_DEFAULT_VALUE);
-		cpufreq_set_max_freq(NULL, PM_QOS_CPU_FREQ_MAX_DEFAULT_VALUE);
-#ifndef CONFIG_CPUQUIET_FRAMEWORK
-		tegra_auto_hotplug_set_min_cpus(0);		// must be disabled when using cpuquiet
-		tegra_auto_hotplug_set_max_cpus(0);		// must be disabled when using cpuquiet
-#endif
-//                                                                                          
-		dev->power_save = false;
-	}
-}
-
-//                                                                                          
-int tegra_camera_set_size(int xres, int yres)
-{
-	struct tegra_camera_dev *camera_dev = tegra_camera_dev;
-	if ((xres <= 0) || (yres <= 0))
-		return -EINVAL;
-
-	mutex_lock(&camera_dev->tegra_camera_lock);
-	camera_dev->xres = xres;
-	camera_dev->yres = yres;
-	tegra_camera_do_power_save(camera_dev);
-	mutex_unlock(&camera_dev->tegra_camera_lock);
-
-	return 0;
-}
-//                                                                                          
-
-static ssize_t tegra_camera_show_power_save_preview(struct device *dev,
-		struct device_attribute *attr, char *buf)
-{
-	struct tegra_camera_dev *camera_dev = dev_get_drvdata(dev);
-	return sprintf(buf, "%d\n", camera_dev->power_save_preview);
-}
-
-static ssize_t tegra_camera_store_power_save_preview(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
-{
-	struct tegra_camera_dev *camera_dev = dev_get_drvdata(dev);
-	int val, ret;
-
-	ret = sscanf(buf, "%d", &val);
-	if (!ret)
-		return ret;
-
-	mutex_lock(&camera_dev->tegra_camera_lock);
-	if (val == 1 && !camera_dev->power_save_preview)
-		camera_dev->power_save_preview = true;
-	else if (val == 0 && camera_dev->power_save_preview)
-		camera_dev->power_save_preview = false;
-
-	tegra_camera_do_power_save(camera_dev);
-	mutex_unlock(&camera_dev->tegra_camera_lock);
-
-	return count;
-}
-
-static DEVICE_ATTR(power_save_preview, S_IRUGO | S_IWUSR | S_IRGRP | S_IWGRP,
-		   tegra_camera_show_power_save_preview,
-		   tegra_camera_store_power_save_preview);
-
-static ssize_t tegra_camera_show_power_save_rec(struct device *dev,
-		struct device_attribute *attr, char *buf)
-{
-	struct tegra_camera_dev *camera_dev = dev_get_drvdata(dev);
-	return sprintf(buf, "%d\n", camera_dev->power_save_rec);
-}
-
-static ssize_t tegra_camera_store_power_save_rec(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
-{
-	struct tegra_camera_dev *camera_dev = dev_get_drvdata(dev);
-	int val, ret;
-
-	ret = sscanf(buf, "%d", &val);
-	if (!ret)
-		return ret;
-
-	mutex_lock(&camera_dev->tegra_camera_lock);
-	if (val == 1 && !camera_dev->power_save_rec)
-		camera_dev->power_save_rec = true;
-	else if (val == 0 && camera_dev->power_save_rec)
-		camera_dev->power_save_rec = false;
-
-	tegra_camera_do_power_save(camera_dev);
-	mutex_unlock(&camera_dev->tegra_camera_lock);
-
-	return count;
-}
-
-static DEVICE_ATTR(power_save_rec, S_IRUGO | S_IWUSR | S_IRGRP | S_IWGRP,
-		   tegra_camera_show_power_save_rec,
-		   tegra_camera_store_power_save_rec);
-
-
-bool tegra_camera_get_power_save_rec(void)
-{
-	if(tegra_camera_dev != NULL)
-	{
-		return tegra_camera_dev->power_save_rec;
-	}
-	return false;
-}
-
-EXPORT_SYMBOL(tegra_camera_get_power_save_rec);
 
 static int tegra_camera_probe(struct platform_device *pdev)
 {
@@ -622,8 +456,6 @@ static int tegra_camera_probe(struct platform_device *pdev)
 			__func__);
 		goto alloc_err;
 	}
-	
-	tegra_camera_dev = dev;  //                                                                                          
 
 	mutex_init(&dev->tegra_camera_lock);
 
@@ -634,7 +466,6 @@ static int tegra_camera_probe(struct platform_device *pdev)
 	if (err)
 		dev_err(&pdev->dev, "%s: powergate failed.\n", __func__);
 #endif
-	dev->power_save = false;
 	mutex_unlock(&dev->tegra_camera_lock);
 
 	dev->dev = &pdev->dev;
@@ -657,6 +488,7 @@ static int tegra_camera_probe(struct platform_device *pdev)
 			return PTR_ERR(dev->reg);
 		}
 	}
+	regulator_set_voltage(dev->reg, 1200000, 1200000);
 
 	dev->misc_dev.minor = MISC_DYNAMIC_MINOR;
 	dev->misc_dev.name = TEGRA_CAMERA_NAME;
@@ -691,18 +523,7 @@ static int tegra_camera_probe(struct platform_device *pdev)
 
 	/* dev is set in order to restore in _remove */
 	platform_set_drvdata(pdev, dev);
-
-	err = device_create_file(dev->dev, &dev_attr_power_save_preview);
-	if (err < 0)
-		dev_warn(dev->dev,
-			 "%s: failed to add power_save_preview sysfs: %d\n",
-			 __func__, err);
-
-	err = device_create_file(dev->dev, &dev_attr_power_save_rec);
-	if (err < 0)
-		dev_warn(dev->dev,
-			 "%s: failed to add power_save_rec sysfs: %d\n",
-			 __func__, err);
+	tegra_camera_dev = dev;
 
 	return 0;
 

@@ -33,16 +33,6 @@
 
 #include <trace/events/power.h>
 
-#define dprintk(msg...) cpufreq_debug_printk(CPUFREQ_DEBUG_CORE, \
-						"cpufreq-core", msg)
-
-//                                                               
-#ifdef CONFIG_ARCH_TEGRA_3x_SOC
-unsigned long cpufreq_limited_max_cores_cur = 4;
-unsigned long cpufreq_limited_max_cores_expected = 4;
-#endif
-//                                                               
-
 /**
  * The "cpufreq driver" - the arch- or hardware-dependent low
  * level driver of CPUFreq support, and its spinlock. This lock
@@ -189,93 +179,6 @@ EXPORT_SYMBOL_GPL(cpufreq_cpu_put);
 
 
 /*********************************************************************
- *                     UNIFIED DEBUG HELPERS                         *
- *********************************************************************/
-#ifdef CONFIG_CPU_FREQ_DEBUG
-
-/* what part(s) of the CPUfreq subsystem are debugged? */
-static unsigned int debug;
-
-/* is the debug output ratelimit'ed using printk_ratelimit? User can
- * set or modify this value.
- */
-static unsigned int debug_ratelimit = 1;
-
-/* is the printk_ratelimit'ing enabled? It's enabled after a successful
- * loading of a cpufreq driver, temporarily disabled when a new policy
- * is set, and disabled upon cpufreq driver removal
- */
-static unsigned int disable_ratelimit = 1;
-static DEFINE_SPINLOCK(disable_ratelimit_lock);
-
-static void cpufreq_debug_enable_ratelimit(void)
-{
-	unsigned long flags;
-
-	spin_lock_irqsave(&disable_ratelimit_lock, flags);
-	if (disable_ratelimit)
-		disable_ratelimit--;
-	spin_unlock_irqrestore(&disable_ratelimit_lock, flags);
-}
-
-static void cpufreq_debug_disable_ratelimit(void)
-{
-	unsigned long flags;
-
-	spin_lock_irqsave(&disable_ratelimit_lock, flags);
-	disable_ratelimit++;
-	spin_unlock_irqrestore(&disable_ratelimit_lock, flags);
-}
-
-void cpufreq_debug_printk(unsigned int type, const char *prefix,
-			const char *fmt, ...)
-{
-	char s[256];
-	va_list args;
-	unsigned int len;
-	unsigned long flags;
-
-	WARN_ON(!prefix);
-	if (type & debug) {
-		spin_lock_irqsave(&disable_ratelimit_lock, flags);
-		if (!disable_ratelimit && debug_ratelimit
-					&& !printk_ratelimit()) {
-			spin_unlock_irqrestore(&disable_ratelimit_lock, flags);
-			return;
-		}
-		spin_unlock_irqrestore(&disable_ratelimit_lock, flags);
-
-		len = snprintf(s, 256, KERN_DEBUG "%s: ", prefix);
-
-		va_start(args, fmt);
-		len += vsnprintf(&s[len], (256 - len), fmt, args);
-		va_end(args);
-
-		printk(s);
-
-		WARN_ON(len < 5);
-	}
-}
-EXPORT_SYMBOL(cpufreq_debug_printk);
-
-
-module_param(debug, uint, 0644);
-MODULE_PARM_DESC(debug, "CPUfreq debugging: add 1 to debug core,"
-			" 2 to debug drivers, and 4 to debug governors.");
-
-module_param(debug_ratelimit, uint, 0644);
-MODULE_PARM_DESC(debug_ratelimit, "CPUfreq debugging:"
-					" set to 0 to disable ratelimiting.");
-
-#else /* !CONFIG_CPU_FREQ_DEBUG */
-
-static inline void cpufreq_debug_enable_ratelimit(void) { return; }
-static inline void cpufreq_debug_disable_ratelimit(void) { return; }
-
-#endif /* CONFIG_CPU_FREQ_DEBUG */
-
-
-/*********************************************************************
  *            EXTERNALLY AFFECTING FREQUENCY CHANGES                 *
  *********************************************************************/
 
@@ -302,7 +205,8 @@ static void adjust_jiffies(unsigned long val, struct cpufreq_freqs *ci)
 		dprintk("saving %lu as reference value for loops_per_jiffy; "
 			"freq is %u kHz\n", l_p_j_ref, l_p_j_ref_freq);
 	}
-	if ((val == CPUFREQ_POSTCHANGE  && ci->old != ci->new) ||
+		if ((val == CPUFREQ_PRECHANGE  && ci->old < ci->new) ||
+	    (val == CPUFREQ_POSTCHANGE && ci->old > ci->new) ||
 	    (val == CPUFREQ_RESUMECHANGE || val == CPUFREQ_SUSPENDCHANGE)) {
 		loops_per_jiffy = cpufreq_scale(l_p_j_ref, l_p_j_ref_freq,
 								ci->new);
@@ -333,7 +237,7 @@ void cpufreq_notify_transition(struct cpufreq_freqs *freqs, unsigned int state)
 	BUG_ON(irqs_disabled());
 
 	freqs->flags = cpufreq_driver->flags;
-	dprintk("notification %u of frequency transition to %u kHz\n",
+	pr_debug("notification %u of frequency transition to %u kHz\n",
 		state, freqs->new);
 
 	policy = per_cpu(cpufreq_cpu_data, freqs->cpu);
@@ -532,9 +436,6 @@ static ssize_t store_scaling_governor(struct cpufreq_policy *policy,
 	unsigned int ret = -EINVAL;
 	char	str_governor[16];
 	struct cpufreq_policy new_policy;
-	char *envp[3];
-	char buf1[64];
-	char buf2[64];
 
 	ret = cpufreq_get_policy(&new_policy, policy->cpu);
 	if (ret)
@@ -554,13 +455,6 @@ static ssize_t store_scaling_governor(struct cpufreq_policy *policy,
 
 	policy->user_policy.policy = policy->policy;
 	policy->user_policy.governor = policy->governor;
-
-	snprintf(buf1, sizeof(buf1), "GOV=%s", policy->governor->name);
-	snprintf(buf2, sizeof(buf2), "CPU=%u", policy->cpu);
-	envp[0] = buf1;
-	envp[1] = buf2;
-	envp[2] = NULL;
-	kobject_uevent_env(cpufreq_global_kobject, KOBJ_ADD, envp);
 
 	if (ret)
 		return ret;
@@ -662,6 +556,32 @@ static ssize_t show_scaling_setspeed(struct cpufreq_policy *policy, char *buf)
 	return policy->governor->show_setspeed(policy, buf);
 }
 
+static ssize_t store_dvfs_test(struct cpufreq_policy *policy,
+					const char *buf, size_t count)
+{
+	unsigned int enable= 0;
+	unsigned int ret;
+
+	if (!policy->governor || !policy->governor->start_dvfs_test)
+		return -EINVAL;
+
+	ret = sscanf(buf, "%u", &enable);
+	if (ret != 1)
+		return -EINVAL;
+
+	policy->governor->start_dvfs_test(policy, enable);
+
+	return count;
+}
+
+static ssize_t show_dvfs_test(struct cpufreq_policy *policy, char *buf)
+{
+	if (!policy->governor || !policy->governor->show_dvfs_test)
+		return sprintf(buf, "<unsupported>\n");
+
+	return policy->governor->show_dvfs_test(policy, buf);
+}
+
 /**
  * show_scaling_driver - show the current cpufreq HW/BIOS limitation
  */
@@ -676,70 +596,6 @@ static ssize_t show_bios_limit(struct cpufreq_policy *policy, char *buf)
 	}
 	return sprintf(buf, "%u\n", policy->cpuinfo.max_freq);
 }
-
-#ifdef CONFIG_VOLTAGE_CONTROL
-/*
- * Tegra3 voltage control via cpufreq by Paul Reioux (faux123)
- * inspired by Michael Huang's voltage control code for OMAP44xx
- */
-
-#include "../../arch/arm/mach-tegra/dvfs.h"
-#include "../../arch/arm/mach-tegra/clock.h"
-
-extern int user_mv_table[MAX_DVFS_FREQS];
-
-static ssize_t show_UV_mV_table(struct cpufreq_policy *policy, char *buf)
-{
-	int i = 0;
-	char *out = buf;
-	struct clk *cpu_clk_g = tegra_get_clock_by_name("cpu_g");
-
-	/* find how many actual entries there are */
-	i = cpu_clk_g->dvfs->num_freqs;
-
-	for(i--; i >=0; i--) {
-		out += sprintf(out, "%lumhz: %i mV\n",
-				cpu_clk_g->dvfs->freqs[i]/1000000,
-				cpu_clk_g->dvfs->millivolts[i]);
-	}
-
-	return out - buf;
-}
-
-static ssize_t store_UV_mV_table(struct cpufreq_policy *policy, const char *buf, size_t count)
-{
-	int i = 0;
-	unsigned long volt_cur;
-	int ret;
-	char size_cur[16];
-
-	struct clk *cpu_clk_g = tegra_get_clock_by_name("cpu_g");
-
-	/* find how many actual entries there are */
-	i = cpu_clk_g->dvfs->num_freqs;
-
-	for(i--; i >= 0; i--) {
-
-		if(cpu_clk_g->dvfs->freqs[i]/1000000 != 0) {
-			ret = sscanf(buf, "%lu", &volt_cur);
-			if (ret != 1)
-				return -EINVAL;
-
-			/* TODO: need some robustness checks */
-			user_mv_table[i] = volt_cur;
-			pr_info("user mv tbl[%i]: %lu\n", i, volt_cur);
-
-			/* Non-standard sysfs interface: advance buf */
-			ret = sscanf(buf, "%s", size_cur);
-			buf += (strlen(size_cur)+1);
-		}
-	}
-	/* update dvfs table here */
-	cpu_clk_g->dvfs->millivolts = user_mv_table;
-
-	return count;
-}
-#endif
 
 cpufreq_freq_attr_ro_perm(cpuinfo_cur_freq, 0400);
 cpufreq_freq_attr_ro(cpuinfo_min_freq);
@@ -757,9 +613,7 @@ cpufreq_freq_attr_rw(scaling_governor);
 cpufreq_freq_attr_rw(scaling_setspeed);
 cpufreq_freq_attr_ro(policy_min_freq);
 cpufreq_freq_attr_ro(policy_max_freq);
-#ifdef CONFIG_VOLTAGE_CONTROL
-cpufreq_freq_attr_rw(UV_mV_table);
-#endif
+cpufreq_freq_attr_rw(dvfs_test);
 
 static struct attribute *default_attrs[] = {
 	&cpuinfo_min_freq.attr,
@@ -775,9 +629,7 @@ static struct attribute *default_attrs[] = {
 	&scaling_setspeed.attr,
 	&policy_min_freq.attr,
 	&policy_max_freq.attr,
-#ifdef CONFIG_VOLTAGE_CONTROL
-	&UV_mV_table.attr,
-#endif
+	&dvfs_test.attr,
 	NULL
 };
 
@@ -1063,7 +915,6 @@ static int cpufreq_add_dev(struct sys_device *sys_dev)
 	if (cpu_is_offline(cpu))
 		return 0;
 
-	cpufreq_debug_disable_ratelimit();
 	dprintk("adding CPU %u\n", cpu);
 
 #ifdef CONFIG_SMP
@@ -1072,7 +923,6 @@ static int cpufreq_add_dev(struct sys_device *sys_dev)
 	policy = cpufreq_cpu_get(cpu);
 	if (unlikely(policy)) {
 		cpufreq_cpu_put(policy);
-		cpufreq_debug_enable_ratelimit();
 		return 0;
 	}
 #endif
@@ -1127,7 +977,7 @@ static int cpufreq_add_dev(struct sys_device *sys_dev)
 		goto err_unlock_policy;
 	}
 	policy->user_policy.min = policy->min;
-	policy->user_policy.max = 1500000;
+	policy->user_policy.max = policy->max;
 
 	blocking_notifier_call_chain(&cpufreq_policy_notifier_list,
 				     CPUFREQ_START, policy);
@@ -1150,7 +1000,6 @@ static int cpufreq_add_dev(struct sys_device *sys_dev)
 	kobject_uevent(&policy->kobj, KOBJ_ADD);
 	module_put(cpufreq_driver->owner);
 	dprintk("initialization complete\n");
-	cpufreq_debug_enable_ratelimit();
 
 	return 0;
 
@@ -1174,7 +1023,6 @@ err_free_policy:
 nomem_out:
 	module_put(cpufreq_driver->owner);
 module_out:
-	cpufreq_debug_enable_ratelimit();
 	return ret;
 }
 
@@ -1198,7 +1046,6 @@ static int __cpufreq_remove_dev(struct sys_device *sys_dev)
 	unsigned int j;
 #endif
 
-	cpufreq_debug_disable_ratelimit();
 	dprintk("unregistering CPU %u\n", cpu);
 
 	spin_lock_irqsave(&cpufreq_driver_lock, flags);
@@ -1206,7 +1053,6 @@ static int __cpufreq_remove_dev(struct sys_device *sys_dev)
 
 	if (!data) {
 		spin_unlock_irqrestore(&cpufreq_driver_lock, flags);
-		cpufreq_debug_enable_ratelimit();
 		unlock_policy_rwsem_write(cpu);
 		return -EINVAL;
 	}
@@ -1223,7 +1069,6 @@ static int __cpufreq_remove_dev(struct sys_device *sys_dev)
 		spin_unlock_irqrestore(&cpufreq_driver_lock, flags);
 		kobj = &sys_dev->kobj;
 		cpufreq_cpu_put(data);
-		cpufreq_debug_enable_ratelimit();
 		unlock_policy_rwsem_write(cpu);
 		sysfs_remove_link(kobj, "cpufreq");
 		return 0;
@@ -1293,8 +1138,6 @@ static int __cpufreq_remove_dev(struct sys_device *sys_dev)
 	if (cpufreq_driver->exit)
 		cpufreq_driver->exit(data);
 	unlock_policy_rwsem_write(cpu);
-
-	cpufreq_debug_enable_ratelimit();
 
 #ifdef CONFIG_HOTPLUG_CPU
 	/* when the CPU which is the parent of the kobj is hotplugged
@@ -1833,7 +1676,6 @@ static int __cpufreq_set_policy(struct cpufreq_policy *data,
 	qmax = max((unsigned int)pm_qos_request(PM_QOS_CPU_FREQ_MAX),
 		   data->user_policy.min);
 
-	cpufreq_debug_disable_ratelimit();
 	dprintk("setting new policy for CPU %u: %u - %u (%u - %u) kHz\n",
 		policy->cpu, pmin, pmax, qmin, qmax);
 
@@ -1918,7 +1760,6 @@ error_out:
 	/* restore the limits that the policy requested */
 	policy->min = pmin;
 	policy->max = pmax;
-	cpufreq_debug_enable_ratelimit();
 	return ret;
 }
 
@@ -2182,7 +2023,6 @@ int cpufreq_register_driver(struct cpufreq_driver *driver_data)
 
 	register_hotcpu_notifier(&cpufreq_cpu_notifier);
 	dprintk("driver %s up and running\n", driver_data->name);
-	cpufreq_debug_enable_ratelimit();
 
 	return 0;
 err_sysdev_unreg:
@@ -2209,12 +2049,8 @@ int cpufreq_unregister_driver(struct cpufreq_driver *driver)
 {
 	unsigned long flags;
 
-	cpufreq_debug_disable_ratelimit();
-
-	if (!cpufreq_driver || (driver != cpufreq_driver)) {
-		cpufreq_debug_enable_ratelimit();
+	if (!cpufreq_driver || (driver != cpufreq_driver))
 		return -EINVAL;
-	}
 
 	dprintk("unregistering driver %s\n", driver->name);
 
@@ -2292,14 +2128,7 @@ static int __init cpufreq_core_init(void)
 	rc = pm_qos_add_notifier(PM_QOS_CPU_FREQ_MAX,
 				 &max_freq_notifier);
 	BUG_ON(rc);
-#ifdef CONFIG_MACH_X3
-//                                                                                     
-	pm_qos_add_request(&cpu_freq_min_req, PM_QOS_CPU_FREQ_MIN,
-			   PM_QOS_DEFAULT_VALUE);
-	pm_qos_add_request(&cpu_freq_max_req, PM_QOS_CPU_FREQ_MAX,
-			   PM_QOS_DEFAULT_VALUE);
-//                                                                                     
-#endif
+
 	return 0;
 }
 core_initcall(cpufreq_core_init);

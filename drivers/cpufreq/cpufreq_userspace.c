@@ -195,6 +195,8 @@ struct cpufreq_governor cpufreq_gov_userspace = {
 	.governor	= cpufreq_governor_userspace,
 	.store_setspeed	= cpufreq_set,
 	.show_setspeed	= show_speed,
+	.start_dvfs_test	 =  start_test,
+	.show_dvfs_test	=  show_test,
 	.owner		= THIS_MODULE,
 };
 

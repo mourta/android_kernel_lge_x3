@@ -1057,11 +1057,9 @@ static struct tegra_suspend_platform_data x3_suspend_data = {
 	.core_off_timer = 0,
 	.corereq_high	= true,
 	.sysclkreq_high	= true,
-//	.wake_low	   =  TEGRA_WAKE_GPIO_PV0,
-//	.wake_enb	  = TEGRA_WAKE_GPIO_PV0,
+	.cpu_lp2_min_residency = 2000,
 	.board_suspend = x3_board_suspend,
 	.board_resume = x3_board_resume,
-//                                  
 	.cpu_resume_boost	= 1500000,
 	.boost_resume_reason	= 0x80,
 };

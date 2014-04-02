@@ -1007,16 +1007,26 @@ static int tegra_suspend_prepare(void)
 
 static void tegra_suspend_finish(void)
 {
-#ifdef CONFIG_MACH_X3
+	if((pdata->boost_resume_reason & (u32)wake_reason_resume) !=
+		wake_reason_resume) {
+		goto noboost;
+	}
+
 	if (pdata && pdata->cpu_resume_boost) {
 		int ret = tegra_suspended_target(pdata->cpu_resume_boost);
 		pr_info("Tegra: resume CPU boost to %u KHz: %s (%d)\n",
 			pdata->cpu_resume_boost, ret ? "Failed" : "OK", ret);
 	}
-#endif
+
+noboost:
+	wake_reason_resume = 0;
+	pr_info("wake reason is 0x%x\n", (u32)wake_reason_resume);
+	pr_info("board boost wake reason is 0x%x\n",
+			(u32)pdata->boost_resume_reason);
 	if ((current_suspend_mode == TEGRA_SUSPEND_LP0) && tegra_deep_sleep)
 		tegra_deep_sleep(0);
 }
+
 
 static const struct platform_suspend_ops tegra_suspend_ops = {
 	.valid		= suspend_valid_only_mem,

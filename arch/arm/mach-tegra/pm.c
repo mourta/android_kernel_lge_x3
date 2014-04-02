@@ -878,6 +878,9 @@ static void tegra_suspend_check_pwr_stats(void)
 	return;
 }
 
+unsigned long long wake_reason_resume;
+EXPORT_SYMBOL(wake_reason_resume);
+
 int tegra_suspend_dram(enum tegra_suspend_mode mode, unsigned int flags)
 {
 	int err = 0;
@@ -987,6 +990,9 @@ int tegra_suspend_dram(enum tegra_suspend_mode mode, unsigned int flags)
 	local_fiq_enable();
 
 	tegra_common_resume();
+
+	wake_reason_resume = __raw_readl(pmc + PMC_WAKE_STATUS);
+	wake_reason_resume |= ((u64)readl(pmc + PMC_WAKE2_STATUS)) << 32;
 
 fail:
 	return err;

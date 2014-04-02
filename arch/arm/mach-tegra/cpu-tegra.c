@@ -56,6 +56,8 @@
 unsigned int power_mode_table[SYSTEM_MODE_END] = {1000000,1200000,1400000};
 
 #define CAMERA_ENABLE_EMC_MINMIAM_RATE (667000000)
+/* Symbol to store resume resume */
+extern unsigned long long wake_reason_resume;
 /* tegra throttling and edp governors require frequencies in the table
    to be in ascending order */
 static struct cpufreq_frequency_table *freq_table;
@@ -1065,8 +1067,13 @@ static int tegra_pm_notify(struct notifier_block *nb, unsigned long event,
                                 is_suspended = false;
                                 pr_info("Tegra cpufreq resume: tegra_cpu_edp_init is_lp_cluster()=%u cpu_clk->parent->name=%s +\n",is_lp_cluster(),cpu_clk->parent->name);
                                 tegra_cpu_edp_init(true);
-                                check_cpu_state();
-                                tegra_cpu_set_speed_cap(&freq);
+								if (wake_reason_resume == 0x80) {
+								tegra_update_cpu_speed(BOOST_CPU_FREQ_MIN);
+								tegra_auto_hotplug_governor(
+								BOOST_CPU_FREQ_MIN, false);
+								} else {
+								check_cpu_state();
+								tegra_cpu_set_speed_cap(&freq);
                                 pr_info("Tegra cpufreq resume: restoring frequency to %d kHz\n", freq);
                 }
                 else
@@ -1175,6 +1182,14 @@ static struct freq_attr *tegra_cpufreq_attr[] = {
 #endif
 	NULL,
 };
+
+static int tegra_cpufreq_resume(struct cpufreq_policy *policy)
+{
+	/*if it's a power key wakeup, uncap the cpu powersave mode for future boost*/
+	if (wake_reason_resume == 0x80)
+		policy->max = 1700000;
+	return 0;
+}
 
 static struct cpufreq_driver tegra_cpufreq_driver = {
 	.verify		= tegra_verify_speed,

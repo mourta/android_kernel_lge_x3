@@ -202,7 +202,6 @@ static struct tegra_thermal_data thermal_data = {
 #else
 	.hysteresis_throttle = 1000,
 #endif
-};
 
 #ifdef CONFIG_TEGRA_SKIN_THROTTLE
 	.skin_device_id = THERMAL_DEVICE_ID_SKIN,
@@ -239,6 +238,7 @@ static struct tegra_thermal_data thermal_data = {
 				4, 6, 11, 18
 			}
 		},
+	},
 #endif
 };
 

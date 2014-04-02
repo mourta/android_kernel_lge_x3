@@ -1062,27 +1062,23 @@ static struct tegra_suspend_platform_data x3_suspend_data = {
 	.board_suspend = x3_board_suspend,
 	.board_resume = x3_board_resume,
 //                                  
-        .cpu_wake_freq = CPU_WAKE_FREQ_LOW,
-        .cpu_lp2_min_residency = 20000,
+	.cpu_resume_boost	= 1500000,
+	.boost_resume_reason	= 0x80,
 };
 
 static void x3_init_deep_sleep_mode(void)
 {
-#if defined(CONFIG_MACH_X3)
-	x3_suspend_data.suspend_mode = TEGRA_SUSPEND_LP0;
-#else
 	struct board_info bi;
 	tegra_get_board_info(&bi);
 	if (bi.board_id == BOARD_1205 && bi.fab == X3_FAB_A01)
 		x3_suspend_data.suspend_mode = TEGRA_SUSPEND_LP1;
-#endif
+	x3_suspend_data.cpu_timer = 8000;
 }
 
 int __init x3_suspend_init(void)
 {
 	x3_init_deep_sleep_mode();
 	tegra_init_suspend(&x3_suspend_data);
-
 	return 0;
 }
 
@@ -1093,10 +1089,8 @@ int __init x3_edp_init(void)
 	unsigned int regulator_mA;
 
 	regulator_mA = get_maximum_cpu_current_supported();
-	if (!regulator_mA) {
-		regulator_mA = 4700; /* regular AP30 */
-	}
 	pr_info("%s: CPU regulator %d mA\n", __func__, regulator_mA);
+	regulator_mA = 5000; /* regular AP30 */
 
 	tegra_init_cpu_edp_limits(regulator_mA);
 	tegra_init_system_edp_limits(TEGRA_BPC_CPU_PWR_LIMIT);
@@ -1119,11 +1113,13 @@ static struct platform_device x3_bpc_mgmt_device = {
 
 void __init x3_bpc_mgmt_init(void)
 {
-#ifdef CONFIG_SMP
-	int int_gpio = TEGRA_GPIO_TO_IRQ(TEGRA_BPC_TRIGGER);
+	int int_gpio;
 
 	tegra_gpio_enable(TEGRA_BPC_TRIGGER);
 
+	int_gpio = TEGRA_GPIO_TO_IRQ(TEGRA_BPC_TRIGGER);
+
+#ifdef CONFIG_SMP
 	cpumask_setall(&(bpc_mgmt_platform_data.affinity_mask));
 	irq_set_affinity_hint(int_gpio,
 				&(bpc_mgmt_platform_data.affinity_mask));

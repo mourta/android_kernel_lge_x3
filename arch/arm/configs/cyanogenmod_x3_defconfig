@@ -646,13 +646,7 @@ CONFIG_CPU_IDLE_GOV_MENU=y
 #
 # CPUQUIET Framework
 #
-# CONFIG_CPUQUIET_FRAMEWORK is not set
-
-#
-# INTELLI PLUG by Paul Reioux
-#
-CONFIG_INTELLI_PLUG=y
-
+CONFIG_CPUQUIET_FRAMEWORK=y
 
 #
 # Floating point emulation

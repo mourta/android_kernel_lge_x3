@@ -186,7 +186,8 @@ static struct skin_therm_active_throttle skin_therm_actives[] = {
 /* All units are in millicelsius */
 static struct tegra_thermal_data thermal_data = {
 	.shutdown_device_id = THERMAL_DEVICE_ID_NCT_EXT,
-	.temp_shutdown = 86000,
+	.temp_throttle = 85000,
+	.temp_shutdown = 100000,
 #if defined(CONFIG_TEGRA_EDP_LIMITS) || defined(CONFIG_TEGRA_THERMAL_THROTTLE)
 	.throttle_edp_device_id = THERMAL_DEVICE_ID_NCT_EXT,
 #endif
@@ -195,11 +196,14 @@ static struct tegra_thermal_data thermal_data = {
 	.hysteresis_edp = 3000,
 #endif
 #ifdef CONFIG_TEGRA_THERMAL_THROTTLE
-	.temp_throttle = 80000, //default 85000
 	.tc1 = 0,
 	.tc2 = 1,
-	.passive_delay = 2000,
+	.passive_delay = 200,
+#else
+	.hysteresis_throttle = 1000,
 #endif
+};
+
 #ifdef CONFIG_TEGRA_SKIN_THROTTLE
 	.skin_device_id = THERMAL_DEVICE_ID_SKIN,
 	.temp_throttle_skin = 43000,
@@ -235,7 +239,6 @@ static struct tegra_thermal_data thermal_data = {
 				4, 6, 11, 18
 			}
 		},
-	},
 #endif
 };
 

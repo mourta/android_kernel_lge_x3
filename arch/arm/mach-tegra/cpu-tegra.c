@@ -1068,9 +1068,9 @@ static int tegra_pm_notify(struct notifier_block *nb, unsigned long event,
                                 pr_info("Tegra cpufreq resume: tegra_cpu_edp_init is_lp_cluster()=%u cpu_clk->parent->name=%s +\n",is_lp_cluster(),cpu_clk->parent->name);
                                 tegra_cpu_edp_init(true);
 								if (wake_reason_resume == 0x80) {
-								tegra_update_cpu_speed(new_speed);
+								tegra_update_cpu_speed(freq_table[suspend_index].frequency);
 								tegra_auto_hotplug_governor(
-								new_speed, false);
+								freq_table[suspend_index].frequency, false);
 								} else
 								check_cpu_state();
 								tegra_cpu_set_speed_cap(&freq);

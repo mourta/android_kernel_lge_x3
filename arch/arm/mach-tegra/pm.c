@@ -139,6 +139,7 @@ struct suspend_context tegra_sctx;
 
 #define PMC_WAKE_STATUS		0x14
 #define PMC_SW_WAKE_STATUS	0x18
+#define PMC_WAKE2_STATUS	0x168
 #define PMC_COREPWRGOOD_TIMER	0x3c
 #define PMC_CPUPWRGOOD_TIMER	0xc8
 #define PMC_CPUPWROFF_TIMER	0xcc

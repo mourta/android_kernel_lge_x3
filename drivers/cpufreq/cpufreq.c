@@ -614,9 +614,6 @@ cpufreq_freq_attr_rw(scaling_setspeed);
 cpufreq_freq_attr_ro(policy_min_freq);
 cpufreq_freq_attr_ro(policy_max_freq);
 cpufreq_freq_attr_rw(dvfs_test);
-#ifdef CONFIG_VOLTAGE_CONTROL
-cpufreq_freq_attr_rw(UV_mV_table);
-#endif
 
 static struct attribute *default_attrs[] = {
 	&cpuinfo_min_freq.attr,
@@ -633,9 +630,6 @@ static struct attribute *default_attrs[] = {
 	&policy_min_freq.attr,
 	&policy_max_freq.attr,
 	&dvfs_test.attr,
-#ifdef CONFIG_VOLTAGE_CONTROL
-	&UV_mV_table.attr,
-#endif
 	NULL
 };
 

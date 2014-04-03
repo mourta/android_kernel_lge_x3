@@ -294,7 +294,7 @@ static noinline int tegra_cpu_speed_balance(void)
 
 //                                                               
 #if defined(CONFIG_MACH_LGE)
-static void tegra_check_limeted_max_cores(void)
+static void tegra_check_limited_max_cores(void)
 {
 	if(is_lp_cluster())
 	{
@@ -353,7 +353,7 @@ static void tegra_auto_hotplug_work_func(struct work_struct *work)
 	
 	//                                                               
 #if defined(CONFIG_MACH_LGE)	
-	tegra_check_limeted_max_cores();
+	tegra_check_limited_max_cores();
 #endif	
 	//                                                               
 

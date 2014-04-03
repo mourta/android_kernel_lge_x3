@@ -30,18 +30,11 @@
 
 #include <asm/cputime.h>
 
-#include <linux/input.h>
-#include <linux/slab.h>
-#include <linux/ktime.h>
-
-extern void set_up2g0_delay(int delay);
-static ktime_t freq_change_time_input;
-//static DEFINE_MUTEX(dbs_mutex);
-
-#define DEFAULT_MIN_SAMPLE_INPUT_TIME 1500000
-static unsigned long min_sample_input_time;
-
-
+//                                                               
+#ifdef CONFIG_ARCH_TEGRA_3x_SOC
+#include "../../arch/arm/mach-tegra/pm.h"
+#endif
+//                                                               
 struct cpufreq_interactive_cpuinfo {
 	struct timer_list cpu_timer;
 	int timer_idlecancel;
@@ -58,6 +51,15 @@ struct cpufreq_interactive_cpuinfo {
 	struct cpufreq_frequency_table *freq_table;
 	unsigned int target_freq;
 	int governor_enabled;
+#if 1//def CONFIG_MACH_X3
+	unsigned long boosted;
+#endif /* CONFIG_MACH_X3 */
+	//                                                               
+#ifdef CONFIG_ARCH_TEGRA_3x_SOC
+	unsigned int last_calc_loads;
+#endif
+	//                                                               
+
 };
 
 static DEFINE_PER_CPU(struct cpufreq_interactive_cpuinfo, cpuinfo);
@@ -131,6 +133,52 @@ static unsigned long midrange_freq;
 static unsigned long midrange_go_maxspeed_load;
 static unsigned long midrange_max_boost;
 
+#if 1//def CONFIG_MACH_X3
+/*
+ * Parameters for dynamic frequency mode
+ */
+struct dynamic_freq_param {
+	unsigned long max_boost;
+	unsigned long min_buck;
+	unsigned long go_downspeed_load;
+	unsigned long downsustain_load;
+	unsigned int freq_1up;
+	unsigned int freq_1dn;
+};
+
+struct cpufreq_interactive_dynamic_freq {
+	unsigned long go_upspeed_load;
+	unsigned long go_downspeed_load;
+	unsigned long boost_high_boundary;
+	unsigned long boost_low_boundary;
+	unsigned long boost_step;
+	unsigned long buck_step;
+
+	struct dynamic_freq_param *params;
+	struct cpufreq_frequency_table *freq_table;
+	unsigned int freq_num;
+
+	unsigned long enabled;
+};
+
+#define DEFAULT_GO_UPSPEED_LOAD		85
+#define DEFAULT_GO_DOWNSPEED_LOAD	70
+#define DEFAULT_BOOST_HIGH_BOUNDARY	300000
+#define DEFAULT_BOOST_LOW_BOUNDARY	300000
+#define DEFAULT_BOOST_STEP		2
+#define DEFAULT_BUCK_STEP		5
+
+static struct cpufreq_interactive_dynamic_freq dynamic_freq = {
+	.go_upspeed_load = DEFAULT_GO_UPSPEED_LOAD,
+	.go_downspeed_load = DEFAULT_GO_DOWNSPEED_LOAD,
+	.boost_high_boundary = DEFAULT_BOOST_HIGH_BOUNDARY,
+	.boost_low_boundary = DEFAULT_BOOST_LOW_BOUNDARY,
+	.boost_step = DEFAULT_BOOST_STEP,
+	.buck_step = DEFAULT_BUCK_STEP,
+	.enabled = 0,
+};
+#endif /* CONFIG_MACH_X3 */
+
 static int cpufreq_governor_interactive(struct cpufreq_policy *policy,
 		unsigned int event);
 
@@ -143,6 +191,163 @@ struct cpufreq_governor cpufreq_gov_interactive = {
 	.max_transition_latency = 10000000,
 	.owner = THIS_MODULE,
 };
+#if 1//def CONFIG_MACH_X3
+static int _set_param_go_downspeed_load(int idx)
+{
+	unsigned int freq = dynamic_freq.freq_table[idx].frequency;
+	unsigned int freq_1dn = dynamic_freq.params[idx].freq_1dn;	
+	int downspeed_load = dynamic_freq.go_downspeed_load;
+	unsigned long dn_load;
+
+calc_downspeed_load:
+	for (dn_load = 1; dn_load <= 100; dn_load++) {
+		if ((freq_1dn * dn_load / freq) >= downspeed_load)
+			break;
+	}
+
+	if (dn_load >= 100) {
+		if (--downspeed_load > 0)
+			goto calc_downspeed_load;
+		else
+			downspeed_load = 100;
+	}
+
+	dynamic_freq.params[idx].go_downspeed_load = downspeed_load;
+	dynamic_freq.params[idx].downsustain_load = dn_load;
+	return 0;
+}
+
+static int _set_param_max_boost(int idx)
+{
+	struct cpufreq_frequency_table *freq_table = dynamic_freq.freq_table;
+	unsigned int freq_num = dynamic_freq.freq_num;
+	int boost_step = dynamic_freq.boost_step;
+	unsigned int freq;
+
+	if (boost_step <= 1) {
+		freq = dynamic_freq.params[idx].freq_1up;
+	} else {
+		if ((idx + boost_step) < freq_num)
+			freq = freq_table[idx + boost_step].frequency;
+		else
+			freq = freq_table[freq_num - 1].frequency;
+	}
+
+	dynamic_freq.params[idx].max_boost = freq - freq_table[idx].frequency;
+	return 0;
+}
+
+static int _set_param_min_buck(int idx)
+{
+	struct cpufreq_frequency_table *freq_table = dynamic_freq.freq_table;
+	int buck_step = dynamic_freq.buck_step;
+	unsigned int freq;
+
+	if (buck_step <= 1) {
+		freq = dynamic_freq.params[idx].freq_1dn;
+	} else {
+		if ((idx - buck_step) > 0)
+			freq = freq_table[idx - buck_step].frequency;
+		else
+			freq = freq_table[0].frequency;
+	}
+
+	dynamic_freq.params[idx].min_buck = freq_table[idx].frequency - freq;
+ 	return 0;
+}
+
+unsigned long cpufreq_interactive_get_boost_step(void)
+{
+	if (!dynamic_freq.enabled)
+		return 0;
+
+	return dynamic_freq.boost_step;
+}
+
+int cpufreq_interactive_set_boost_step(unsigned long val)
+{
+	int i;
+
+	if (!dynamic_freq.enabled || (dynamic_freq.boost_step == val))
+		return 0;
+
+	dynamic_freq.boost_step = val;
+	for (i = 0; i < dynamic_freq.freq_num; i++) {
+		if (dynamic_freq.freq_table[i].frequency ==
+				CPUFREQ_ENTRY_INVALID)
+			continue;
+		_set_param_max_boost(i);
+	}
+	return 0;
+}
+
+static int cpufreq_interactive_dynamic_freq_alloc(void)
+{
+	int i = 0;
+
+	dynamic_freq.freq_table = cpufreq_frequency_get_table(0);
+	while (dynamic_freq.freq_table[i].frequency != CPUFREQ_TABLE_END)
+		i++;
+	dynamic_freq.freq_num = i;
+
+	dynamic_freq.params = kzalloc(sizeof(struct dynamic_freq_param) * i,
+				      GFP_KERNEL);
+	if (!dynamic_freq.params) {
+		pr_err("%s: Failed to alloc memory for params\n", __func__);
+		return -ENOMEM;
+	}
+	return 0;
+}
+
+static void cpufreq_interactive_dynamic_freq_free(void)
+{
+	kfree(dynamic_freq.params);
+}
+
+static int cpufreq_interactive_dynamic_freq_init(void)
+{
+	struct cpufreq_frequency_table *freq_table;
+	struct dynamic_freq_param *param = NULL;
+	unsigned int freq = 0;
+	int i, ret;
+
+	if (!dynamic_freq.enabled)
+		return 0;
+
+	if (!dynamic_freq.params) {
+		ret = cpufreq_interactive_dynamic_freq_alloc();
+		if (ret < 0) {
+			dynamic_freq.enabled = 0;
+			return ret;		
+		}
+	}
+
+	freq_table = dynamic_freq.freq_table;
+	for (i = 0; i < dynamic_freq.freq_num; i++) {
+		freq = freq_table[i].frequency;
+		if (freq == CPUFREQ_ENTRY_INVALID)
+			continue;
+
+		param = &dynamic_freq.params[i];
+
+		if ((i + 1) < dynamic_freq.freq_num)
+			param->freq_1up = freq_table[i + 1].frequency;
+		else
+			param->freq_1up =
+				freq_table[dynamic_freq.freq_num - 1].frequency;
+
+		if ((i - 1) > 0)
+			param->freq_1dn = freq_table[i - 1].frequency;
+		else
+			param->freq_1dn = freq_table[0].frequency;
+
+		_set_param_go_downspeed_load(i);
+		_set_param_max_boost(i);
+		_set_param_min_buck(i);
+	}
+	return 0;
+}
+#endif /* CONFIG_MACH_X3 */
 
 static unsigned int cpufreq_interactive_get_target(
 	int cpu_load, int load_since_change, struct cpufreq_policy *policy)
@@ -150,7 +355,12 @@ static unsigned int cpufreq_interactive_get_target(
 	unsigned int target_freq;
 	unsigned int maxspeed_load = go_maxspeed_load;
 	unsigned int mboost = max_boost;
-
+#if 1//def CONFIG_MACH_X3
+	struct cpufreq_interactive_cpuinfo *pcpu = NULL;
+	struct dynamic_freq_param *param = NULL;
+	unsigned long low_boundary = 0;
+	unsigned long high_boundary = 0;
+#endif
 	/*
 	 * Choose greater of short-term load (since last idle timer
 	 * started or timer function re-armed itself) or long-term load
@@ -163,7 +373,66 @@ static unsigned int cpufreq_interactive_get_target(
 		maxspeed_load = midrange_go_maxspeed_load;
 		mboost = midrange_max_boost;
 	}
+#if 1//def CONFIG_MACH_X3
+	if (dynamic_freq.enabled) {
+		int i;
+		pcpu = &per_cpu(cpuinfo, policy->cpu);
+		low_boundary = dynamic_freq.boost_low_boundary;
+		high_boundary = dynamic_freq.boost_high_boundary;
+		for (i = 0; i < dynamic_freq.freq_num; i++) {
+			if (policy->cur ==
+					dynamic_freq.freq_table[i].frequency) {
+				param = &dynamic_freq.params[i];
+				break;
+			} else if (policy->cur >
+					dynamic_freq.freq_table[i].frequency) {
+				param = &dynamic_freq.params[i];
+			}
+		}
+	}
 
+	if (cpu_load >= maxspeed_load) {
+		if (!dynamic_freq.enabled) {
+			if (!boost_factor)
+				return policy->max;
+			target_freq = policy->cur * boost_factor;
+			if (max_boost && target_freq > policy->cur + max_boost)
+				target_freq = policy->cur + max_boost;
+		} else {
+			if ((!pcpu->boosted && policy->cur <= high_boundary) ||
+					(policy->cur <= low_boundary))
+				target_freq = policy->cur + param->max_boost;
+			else
+				target_freq = param->freq_1up;
+
+			if (policy->cur > low_boundary)
+				pcpu->boosted++;
+		}
+	} else {
+		if (!dynamic_freq.enabled) {
+			if (!sustain_load)
+				return policy->max * cpu_load / 100;
+
+			target_freq = policy->cur * cpu_load / sustain_load;
+		} else {
+			if (cpu_load >= dynamic_freq.go_upspeed_load) {
+				target_freq = param->freq_1up;
+			} else if (sustain_load && cpu_load >= sustain_load) {
+				target_freq = policy->cur;
+			} else if (cpu_load >= param->go_downspeed_load) {
+				target_freq = param->freq_1dn;
+			} else {
+				target_freq = policy->cur * cpu_load /
+						param->downsustain_load;
+				if (target_freq < policy->cur - param->min_buck)
+					target_freq = policy->cur -
+						      param->min_buck;
+			}
+			pcpu->boosted = 0;
+		}
+	}
+
+#else
 	if (cpu_load >= maxspeed_load) {
 		if (!boost_factor)
 			return policy->max;
@@ -179,7 +448,7 @@ static unsigned int cpufreq_interactive_get_target(
 
 		target_freq = policy->cur * cpu_load / sustain_load;
 	}
-
+#endif /* CONFIG_MACH_X3 */
 	target_freq = min(target_freq, policy->max);
 	return target_freq;
 }
@@ -275,6 +544,13 @@ static void cpufreq_interactive_timer(unsigned long data)
 			100 * (delta_time - delta_idle) / delta_time;
 	}
 
+
+	//                                                               
+#ifdef CONFIG_ARCH_TEGRA_3x_SOC
+	pcpu->last_calc_loads = cpu_load>load_since_change ? cpu_load : load_since_change;
+#endif
+	//                                                               
+
 	/*
 	 * Combine short-term load (since last idle timer started or timer
 	 * function re-armed itself) and long-term load (since last frequency
@@ -321,19 +597,13 @@ static void cpufreq_interactive_timer(unsigned long data)
 	}
 
 	if (new_freq < pcpu->target_freq) {
-		if ( pcpu->policy->cpu != 0 || ktime_to_us(ktime_sub(ktime_get(), freq_change_time_input)) >= min_sample_input_time)
-		{
-			pcpu->target_freq = new_freq;
-		}
+		pcpu->target_freq = new_freq;
 		spin_lock_irqsave(&down_cpumask_lock, flags);
 		cpumask_set_cpu(data, &down_cpumask);
 		spin_unlock_irqrestore(&down_cpumask_lock, flags);
 		queue_work(down_wq, &freq_scale_down_work);
 	} else {
-		if ( pcpu->policy->cpu != 0 || ktime_to_us(ktime_sub(ktime_get(), freq_change_time_input)) >= min_sample_input_time)
-		{
-			pcpu->target_freq = new_freq;
-		}
+		pcpu->target_freq = new_freq;
 		spin_lock_irqsave(&up_cpumask_lock, flags);
 		cpumask_set_cpu(data, &up_cpumask);
 		spin_unlock_irqrestore(&up_cpumask_lock, flags);
@@ -499,11 +769,11 @@ static int cpufreq_interactive_up_task(void *data)
 			pcpu = &per_cpu(cpuinfo, cpu);
 			smp_rmb();
 
-                        mutex_lock(&gov_state_lock);
-                        if (!pcpu->governor_enabled) {
-                                mutex_unlock(&gov_state_lock);
-                                continue;
-                        }
+			mutex_lock(&gov_state_lock);
+			if (!pcpu->governor_enabled) {
+				mutex_unlock(&gov_state_lock);
+				continue;
+			}
 
 			mutex_lock(&set_speed_lock);
 
@@ -515,11 +785,11 @@ static int cpufreq_interactive_up_task(void *data)
 					max_freq = pjcpu->target_freq;
 			}
 
-			__cpufreq_driver_target(pcpu->policy, max_freq, CPUFREQ_RELATION_H);
-
+			__cpufreq_driver_target(pcpu->policy,
+						max_freq,
+						CPUFREQ_RELATION_H);
 			mutex_unlock(&set_speed_lock);
-                        mutex_unlock(&gov_state_lock);
-
+			mutex_unlock(&gov_state_lock);
 			pcpu->freq_change_time_in_idle =
 				get_cpu_idle_time_us(cpu,
 						     &pcpu->freq_change_time);
@@ -550,11 +820,11 @@ static void cpufreq_interactive_freq_down(struct work_struct *work)
 		pcpu = &per_cpu(cpuinfo, cpu);
 		smp_rmb();
 
-                mutex_lock(&gov_state_lock);
-                if (!pcpu->governor_enabled) {
-                        mutex_unlock(&gov_state_lock);
-                        continue;
-                }
+		mutex_lock(&gov_state_lock);
+		if (!pcpu->governor_enabled) {
+				mutex_unlock(&gov_state_lock);
+				continue;
+			}
 
 		mutex_lock(&set_speed_lock);
 
@@ -566,10 +836,11 @@ static void cpufreq_interactive_freq_down(struct work_struct *work)
 				max_freq = pjcpu->target_freq;
 		}
 
-		__cpufreq_driver_target(pcpu->policy, max_freq, CPUFREQ_RELATION_H);
+		__cpufreq_driver_target(pcpu->policy, max_freq,
+					CPUFREQ_RELATION_H);
 
 		mutex_unlock(&set_speed_lock);
-                mutex_unlock(&gov_state_lock);
+		mutex_unlock(&gov_state_lock);
 		pcpu->freq_change_time_in_idle =
 			get_cpu_idle_time_us(cpu,
 					     &pcpu->freq_change_time);
@@ -613,9 +884,99 @@ DECL_CPUFREQ_INTERACTIVE_ATTR(min_sample_time)
 DECL_CPUFREQ_INTERACTIVE_ATTR(timer_rate)
 DECL_CPUFREQ_INTERACTIVE_ATTR(high_freq_min_delay)
 DECL_CPUFREQ_INTERACTIVE_ATTR(max_normal_freq)
-DECL_CPUFREQ_INTERACTIVE_ATTR(min_sample_input_time)
 
 #undef DECL_CPUFREQ_INTERACTIVE_ATTR
+
+//                                                               
+#ifdef CONFIG_ARCH_TEGRA_3x_SOC
+static ssize_t store_cores_states(struct kobject *kobj,
+			struct attribute *attr, const char *buf, size_t count)
+{
+	unsigned long new_max_cores;
+	if (!strict_strtoul(buf, 0, &new_max_cores))
+	{		
+		switch(new_max_cores)
+		{
+			case 1:
+			case 2:
+			case 4:
+				cpufreq_limited_max_cores_expected = new_max_cores;
+				break;
+			default:
+				break;
+		}
+		return count;
+	}	
+
+	return -EINVAL;
+}
+
+static ssize_t show_cores_states(struct kobject *kobj,
+				struct attribute *attr, char *buf)
+{
+	//cluster check 
+	unsigned int is_lp = is_lp_cluster();
+	unsigned int cores[4];
+	unsigned int loads[4];
+	unsigned int i = 0;
+
+	struct cpufreq_interactive_cpuinfo *pcpu;
+
+	unsigned int freq = cpufreq_quick_get(0);
+
+	// initalize values
+	cores[0] = cores[1] = cores[2] = cores[3] = 0;	
+	loads[0] = loads[1] = loads[2] = loads[3] = 0;
+
+	//get value for online cpu
+	for_each_online_cpu(i) {
+		pcpu = &per_cpu(cpuinfo, i);
+		cores[i] = 1;
+		if( pcpu->last_calc_loads > 0 &&
+			pcpu->last_calc_loads < 101)
+		{
+			loads[i] = pcpu->last_calc_loads;				
+		}				
+	}		
+
+	return sprintf(buf, "%d %d %d %d %d %d %d %d %d %d %d\n", is_lp, 
+														cores[0],cores[1],cores[2],cores[3],
+														loads[0],loads[1],loads[2],loads[3],
+														freq, cpufreq_limited_max_cores_cur);
+}
+
+static struct global_attr cores_states_attr = __ATTR(cores_states, 0644,
+		show_cores_states, store_cores_states);
+#endif
+//                                                               
+
+static ssize_t show_dynamic_freq_mode(struct kobject *kobj,
+			struct attribute *attr, char *buf)
+{
+	return sprintf(buf, "%lu\n", dynamic_freq.enabled);
+}
+
+static ssize_t store_dynamic_freq_mode(struct kobject *kobj,
+			struct attribute *attr, const char *buf, size_t count)
+{
+	unsigned long val;
+	int ret;
+
+	ret = strict_strtoul(buf, 0, &val);
+	if (ret < 0)
+		return ret;
+
+	if (val == dynamic_freq.enabled)
+		return count;
+
+	dynamic_freq.enabled = val;
+
+	cpufreq_interactive_dynamic_freq_init();
+	return count;
+}
+
+static struct global_attr dynamic_freq_mode_attr = __ATTR(dynamic_freq_mode,
+		0644, show_dynamic_freq_mode, store_dynamic_freq_mode);
 
 static struct attribute *interactive_attributes[] = {
 	&go_maxspeed_load_attr.attr,
@@ -627,105 +988,21 @@ static struct attribute *interactive_attributes[] = {
 	&io_is_busy_attr.attr,
 	&sustain_load_attr.attr,
 	&min_sample_time_attr.attr,
+	&dynamic_freq_mode_attr.attr,
 	&timer_rate_attr.attr,
+	//                                                               
+#ifdef CONFIG_ARCH_TEGRA_3x_SOC
+	&cores_states_attr.attr,
+#endif
+	//                                                               
 	&high_freq_min_delay_attr.attr,
 	&max_normal_freq_attr.attr,
-	 &min_sample_input_time_attr.attr,
 	NULL,
 };
 
 static struct attribute_group interactive_attr_group = {
 	.attrs = interactive_attributes,
 	.name = "interactive",
-};
-
-static void dbs_refresh_callback(struct work_struct *unused)
-{
-	struct cpufreq_interactive_cpuinfo *pcpu;
-	//only scale the freq to max on CPU0:
-	pcpu = &per_cpu(cpuinfo, 0);
-	if (!pcpu->governor_enabled)
-		return;
-
-	/*spin_lock_irqsave(&up_cpumask_lock, flags);
-	cpumask_set_cpu(0, &up_cpumask);
-	spin_unlock_irqrestore(&up_cpumask_lock, flags);*/
-	//printk("cur:%d\n",pcpu->policy->cur);
-	freq_change_time_input = ktime_get();
-	if (pcpu->policy->cur < pcpu->policy->max-200000) {//minus 200Mhz for now
-		pcpu->target_freq = pcpu->policy->max;
-		__cpufreq_driver_target(pcpu->policy,
-						pcpu->target_freq,
-						CPUFREQ_RELATION_H);
-		pcpu->freq_change_time_in_idle =
-				get_cpu_idle_time_us(0, &pcpu->freq_change_time);
-		//printk("UP!!! %d: set tgt=%d (actual=%d)\n", 0, pcpu->target_freq, pcpu->policy->cur);
-	}
-}
-
-static DECLARE_WORK(dbs_refresh_work, dbs_refresh_callback);
-
-static void dbs_input_event(struct input_handle *handle, unsigned int type,
-		unsigned int code, int value)
-{
-	schedule_work(&dbs_refresh_work);
-}
-
-static int dbs_input_connect(struct input_handler *handler,
-		struct input_dev *dev, const struct input_device_id *id)
-{
-	struct input_handle *handle;
-	int error;
-
-	handle = kzalloc(sizeof(struct input_handle), GFP_KERNEL);
-	if (!handle)
-		return -ENOMEM;
-
-	handle->dev = dev;
-	handle->handler = handler;
-	handle->name = "cpufreq";
-
-	error = input_register_handle(handle);
-	if (error)
-		goto err2;
-
-	error = input_open_device(handle);
-	if (error)
-		goto err1;
-
-	return 0;
-err1:
-	input_unregister_handle(handle);
-err2:
-	kfree(handle);
-	return error;
-}
-
-static void dbs_input_disconnect(struct input_handle *handle)
-{
-	input_close_device(handle);
-	input_unregister_handle(handle);
-	kfree(handle);
-}
-
-static const struct input_device_id dbs_ids[] = {
-	{
-		.flags = INPUT_DEVICE_ID_MATCH_EVBIT |
-			 INPUT_DEVICE_ID_MATCH_ABSBIT,
-		.evbit = { BIT_MASK(EV_ABS) },
-		.absbit = { [BIT_WORD(ABS_MT_POSITION_X)] =
-			    BIT_MASK(ABS_MT_POSITION_X) |
-			    BIT_MASK(ABS_MT_POSITION_Y) },
-	}, /* multi-touch touchscreen */
-	{},
-};
-
-static struct input_handler dbs_input_handler = {
-	.event		= dbs_input_event,
-	.connect	= dbs_input_connect,
-	.disconnect	= dbs_input_disconnect,
-	.name		= "cpufreq_interactive",
-	.id_table	= dbs_ids,
 };
 
 static int cpufreq_governor_interactive(struct cpufreq_policy *policy,
@@ -744,7 +1021,7 @@ static int cpufreq_governor_interactive(struct cpufreq_policy *policy,
 		freq_table =
 			cpufreq_frequency_get_table(policy->cpu);
 
-                mutex_lock(&gov_state_lock);
+					mutex_lock(&gov_state_lock);
 		for_each_cpu(j, policy->cpus) {
 			pcpu = &per_cpu(cpuinfo, j);
 			pcpu->policy = policy;
@@ -762,6 +1039,11 @@ static int cpufreq_governor_interactive(struct cpufreq_policy *policy,
 				pcpu->last_high_freq_time = pcpu->freq_change_time;
 			pcpu->timer_idlecancel = 1;
 			pcpu->governor_enabled = 1;
+//                                                               
+#ifdef CONFIG_ARCH_TEGRA_3x_SOC
+		pcpu->last_calc_loads = 0;
+#endif
+//                                                               
 			smp_wmb();
 
 			if (!timer_pending(&pcpu->cpu_timer))
@@ -784,18 +1066,16 @@ static int cpufreq_governor_interactive(struct cpufreq_policy *policy,
 				mutex_unlock(&gov_state_lock);
 				return rc;
 			}
-
-			if(policy->cpu == 0) {
-				freq_change_time_input = ktime_get();
-				input_register_handler(&dbs_input_handler);
-			}
 		}
+#if 1 //def CONFIG_MACH_X3
+		cpufreq_interactive_dynamic_freq_init();
+#endif
 		mutex_unlock(&gov_state_lock);
 
 		break;
 
 	case CPUFREQ_GOV_STOP:
-                mutex_lock(&gov_state_lock);
+			mutex_lock(&gov_state_lock);
 		for_each_cpu(j, policy->cpus) {
 			pcpu = &per_cpu(cpuinfo, j);
 			pcpu->governor_enabled = 0;
@@ -811,7 +1091,7 @@ static int cpufreq_governor_interactive(struct cpufreq_policy *policy,
 			pcpu->idle_exit_time = 0;
 		}
 
-                mutex_unlock(&gov_state_lock);
+		mutex_unlock(&gov_state_lock);
 		flush_work(&freq_scale_down_work);
 		mutex_lock(&gov_state_lock);
 
@@ -822,9 +1102,6 @@ static int cpufreq_governor_interactive(struct cpufreq_policy *policy,
 					&interactive_attr_group);
 			kobject_uevent(interactive_kobj, KOBJ_REMOVE);
 			kobject_put(interactive_kobj);
-			if(policy->cpu == 0)
-				input_unregister_handler(&dbs_input_handler);
-
 		}
 
 		mutex_unlock(&gov_state_lock);
@@ -868,14 +1145,15 @@ static int __init cpufreq_interactive_init(void)
 	unsigned int i;
 	struct cpufreq_interactive_cpuinfo *pcpu;
 	struct sched_param param = { .sched_priority = MAX_RT_PRIO-1 };
-
+#if 1//def CONFIG_MACH_X3
+	int ret;
+#endif
 	go_maxspeed_load = DEFAULT_GO_MAXSPEED_LOAD;
 	midrange_go_maxspeed_load = DEFAULT_MID_RANGE_GO_MAXSPEED_LOAD;
 	min_sample_time = DEFAULT_MIN_SAMPLE_TIME;
 	timer_rate = DEFAULT_TIMER_RATE;
 	high_freq_min_delay = DEFAULT_HIGH_FREQ_MIN_DELAY;
 	max_normal_freq = DEFAULT_MAX_NORMAL_FREQ;
-	min_sample_input_time = DEFAULT_MIN_SAMPLE_INPUT_TIME;
 
 	/* Initalize per-cpu timers */
 	for_each_possible_cpu(i) {
@@ -884,12 +1162,20 @@ static int __init cpufreq_interactive_init(void)
 		pcpu->cpu_timer.function = cpufreq_interactive_timer;
 		pcpu->cpu_timer.data = i;
 	}
-
+#if 1//def CONFIG_MACH_X3
+	ret = cpufreq_interactive_dynamic_freq_alloc();
+	if (ret < 0)
+		return ret;
+#endif
 	up_task = kthread_create(cpufreq_interactive_up_task, NULL,
 				 "kinteractiveup");
-	if (IS_ERR(up_task))
+	if (IS_ERR(up_task)){
+#if 1//def CONFIG_MACH_X3 
+		goto err_free_dynamic_freq;
+#else
 		return PTR_ERR(up_task);
-
+#endif
+        }
 	sched_setscheduler_nocheck(up_task, SCHED_FIFO, &param);
 	get_task_struct(up_task);
 
@@ -914,6 +1200,10 @@ static int __init cpufreq_interactive_init(void)
 
 err_freeuptask:
 	put_task_struct(up_task);
+#if 1//def CONFIG_MACH_X3
+err_free_dynamic_freq:
+	cpufreq_interactive_dynamic_freq_free();
+#endif
 	return -ENOMEM;
 }
 
@@ -929,6 +1219,9 @@ static void __exit cpufreq_interactive_exit(void)
 	kthread_stop(up_task);
 	put_task_struct(up_task);
 	destroy_workqueue(down_wq);
+#if 1//def CONFIG_MACH_X3
+	cpufreq_interactive_dynamic_freq_free();
+#endif
 }
 
 module_exit(cpufreq_interactive_exit);

@@ -1063,16 +1063,8 @@ static int cpufreq_add_dev(struct sys_device *sys_dev)
 	if (cpu_is_offline(cpu))
 		return 0;
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-	pr_debug("adding CPU %u\n", cpu);
-=======
 	cpufreq_debug_disable_ratelimit();
 	dprintk("adding CPU %u\n", cpu);
->>>>>>> parent of c9a5623... Cleanup cpufreq
-=======
-	dprintk("adding CPU %u\n", cpu);
->>>>>>> parent of 0822274... Stop nagging me
 
 #ifdef CONFIG_SMP
 	/* check whether a different CPU already registered this
@@ -1157,16 +1149,8 @@ static int cpufreq_add_dev(struct sys_device *sys_dev)
 
 	kobject_uevent(&policy->kobj, KOBJ_ADD);
 	module_put(cpufreq_driver->owner);
-<<<<<<< HEAD
-<<<<<<< HEAD
-	pr_debug("initialization complete\n");
-=======
 	dprintk("initialization complete\n");
 	cpufreq_debug_enable_ratelimit();
->>>>>>> parent of c9a5623... Cleanup cpufreq
-=======
-	dprintk("initialization complete\n");
->>>>>>> parent of 0822274... Stop nagging me
 
 	return 0;
 
@@ -1214,16 +1198,8 @@ static int __cpufreq_remove_dev(struct sys_device *sys_dev)
 	unsigned int j;
 #endif
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-	pr_debug("unregistering CPU %u\n", cpu);
-=======
 	cpufreq_debug_disable_ratelimit();
 	dprintk("unregistering CPU %u\n", cpu);
->>>>>>> parent of c9a5623... Cleanup cpufreq
-=======
-	dprintk("unregistering CPU %u\n", cpu);
->>>>>>> parent of 0822274... Stop nagging me
 
 	spin_lock_irqsave(&cpufreq_driver_lock, flags);
 	data = per_cpu(cpufreq_cpu_data, cpu);
@@ -1857,16 +1833,8 @@ static int __cpufreq_set_policy(struct cpufreq_policy *data,
 	qmax = max((unsigned int)pm_qos_request(PM_QOS_CPU_FREQ_MAX),
 		   data->user_policy.min);
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-	pr_debug("setting new policy for CPU %u: %u - %u (%u - %u) kHz\n",
-=======
 	cpufreq_debug_disable_ratelimit();
 	dprintk("setting new policy for CPU %u: %u - %u (%u - %u) kHz\n",
->>>>>>> parent of c9a5623... Cleanup cpufreq
-=======
-	dprintk("setting new policy for CPU %u: %u - %u (%u - %u) kHz\n",
->>>>>>> parent of 0822274... Stop nagging me
 		policy->cpu, pmin, pmax, qmin, qmax);
 
 	/* clamp the new policy to PM QoS limits */
@@ -2213,16 +2181,8 @@ int cpufreq_register_driver(struct cpufreq_driver *driver_data)
 	}
 
 	register_hotcpu_notifier(&cpufreq_cpu_notifier);
-<<<<<<< HEAD
-<<<<<<< HEAD
-	pr_debug("driver %s up and running\n", driver_data->name);
-=======
 	dprintk("driver %s up and running\n", driver_data->name);
 	cpufreq_debug_enable_ratelimit();
->>>>>>> parent of c9a5623... Cleanup cpufreq
-=======
-	dprintk("driver %s up and running\n", driver_data->name);
->>>>>>> parent of 0822274... Stop nagging me
 
 	return 0;
 err_sysdev_unreg:

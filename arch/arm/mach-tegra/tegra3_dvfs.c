@@ -916,7 +916,7 @@ core_cap_state_store(struct kobject *kobj, struct kobj_attribute *attr,
 		if (user_core_cap.refcnt == 1)
 			core_cap_enable(true);
 	} else if (user_core_cap.refcnt) {
-		user_core_cap.refcnt--;
+		user_core_cap.refcnt=0;
 		if (user_core_cap.refcnt == 0)
 			core_cap_enable(false);
 	}
@@ -986,7 +986,7 @@ cbus_cap_state_store(struct kobject *kobj, struct kobj_attribute *attr,
 	if (state) {
 		user_cbus_cap.refcnt++;
 		if (user_cbus_cap.refcnt == 1)
-			cbus_cap_update();
+		cbus_cap_update();
 	} else if (user_cbus_cap.refcnt) {
 		user_cbus_cap.refcnt--;
 		if (user_cbus_cap.refcnt == 0)

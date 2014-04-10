@@ -92,14 +92,12 @@ static struct throttle_table throttle_freqs_tj[] = {
 	      {  620000,  352000,  NO_CAP,  NO_CAP },
 	      {  475000,  352000,  NO_CAP,  NO_CAP },
 	      {  475000,  352000,  NO_CAP,  NO_CAP },
-              {  475000,  352000,  250000,  375000 },
-              {  475000,  352000,  250000,  375000 },
-              {  475000,  247000,  204000,  375000 },
-              {  475000,  247000,  204000,  375000 },
-              {  475000,  247000,  204000,  375000 },
-#if 0 /*                                                               */
+	      {  475000,  352000,  250000,  375000 },
+	      {  475000,  352000,  250000,  375000 },
+	      {  475000,  247000,  204000,  375000 },
+	      {  475000,  247000,  204000,  204000 },
+	      {  475000,  247000,  204000,  204000 },
 	{ CPU_THROT_LOW,  247000,  204000,  102000 },
-#endif
 };
 #endif
 
@@ -115,14 +113,12 @@ static struct throttle_table throttle_freqs_tskin[] = {
 	      {  620000,  352000,  NO_CAP,  NO_CAP },
 	      {  475000,  352000,  NO_CAP,  NO_CAP },
 	      {  475000,  352000,  NO_CAP,  NO_CAP },
-              {  475000,  352000,  250000,  375000 },
-              {  475000,  352000,  250000,  375000 },
-              {  475000,  247000,  204000,  375000 },
-              {  475000,  247000,  204000,  375000 },
-              {  475000,  247000,  204000,  375000 },
-#if 0 /*                                                               */
+	      {  475000,  352000,  250000,  375000 },
+	      {  475000,  352000,  250000,  375000 },
+	      {  475000,  247000,  204000,  375000 },
+	      {  475000,  247000,  204000,  204000 },
+	      {  475000,  247000,  204000,  204000 },
 	{ CPU_THROT_LOW,  247000,  204000,  102000 },
-#endif
 };
 #endif
 
@@ -155,7 +151,7 @@ static struct tegra_thermal_data thermal_data = {
 	.hysteresis_edp = 3000,
 #endif
 #ifdef CONFIG_TEGRA_THERMAL_THROTTLE
-	.temp_throttle = 71000, //default 85000
+	.temp_throttle = 85000,
 	.tc1 = 0,
 	.tc2 = 1,
 	.passive_delay = 2000,
@@ -458,7 +454,7 @@ static struct lge_battery_platform_data lge_battery_plat = {
 	.gauge_name     = "fuelgauge",
 	.charger_name   = "charger",
 #if (CONFIG_ADC_TSC2007)
-	.adc_name		= "tsc2007_adc",	//                                        
+	.adc_name		= "tsc2007_adc",	//                                   
 #endif	
 };
 

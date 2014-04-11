@@ -21,7 +21,7 @@
 #include <linux/cpumask.h>
 #include <linux/module.h>
 #include <linux/cpufreq.h>
-#include <linux/pm_qos_params.h>
+#include <linux/pm_qos.h>
 #include <linux/jiffies.h>
 #include <linux/slab.h>
 #include <linux/cpu.h>
@@ -62,10 +62,8 @@ static unsigned int  idle_bottom_freq;
 static unsigned int  idle_top_freq;
 static unsigned long up_delay;
 static unsigned long down_delay;
-#ifdef CONFIG_TEGRA_RUNNABLE_THREAD
 static unsigned long last_change_time;
 static unsigned int  load_sample_rate = 20; /* msec */
-#endif
 static struct workqueue_struct *balanced_wq;
 static struct delayed_work balanced_work;
 static BALANCED_STATE balanced_state;
@@ -94,11 +92,7 @@ static void calculate_load_timer(unsigned long data)
 		do_div(idle_time, elapsed_time);
 		*load = 100 - idle_time;
 	}
-#ifdef CONFIG_TEGRA_RUNNABLE_THREAD
 	mod_timer(&load_timer, jiffies + msecs_to_jiffies(load_sample_rate));
-#else
-	mod_timer(&load_timer, jiffies + msecs_to_jiffies(100));
-#endif
 }
 
 static void start_load_timer(void)
@@ -174,15 +168,89 @@ static unsigned int count_slow_cpus(unsigned int limit)
 
 	return cnt;
 }
-#ifdef CONFIG_TEGRA_RUNNABLE_THREAD
+
 #define NR_FSHIFT	2
-static unsigned int nr_run_thresholds[] = {
+
+static unsigned int rt_profile_sel;
+static unsigned int core_bias; //Dummy variable exposed to userspace
+
+static unsigned int rt_profile_default[] = {
 /*      1,  2,  3,  4 - on-line cpus target */
-	5,  9, 10, UINT_MAX /* avg run threads * 4 (e.g., 9 = 2.25 threads) */
+	5,  9, 10, UINT_MAX
 };
+
+static unsigned int rt_profile_1[] = {
+/*      1,  2,  3,  4 - on-line cpus target */
+	8,  9, 10, UINT_MAX
+};
+
+static unsigned int rt_profile_2[] = {
+/*      1,  2,  3,  4 - on-line cpus target */
+	5,  13, 14, UINT_MAX
+};
+
+static unsigned int rt_profile_disable[] = {
+/*      1,  2,  3,  4 - on-line cpus target */
+	0,  0, 0, UINT_MAX
+};
+
+static unsigned int *rt_profiles[] = {
+	rt_profile_default,
+	rt_profile_1,
+	rt_profile_2,
+	rt_profile_disable
+};
+
 static unsigned int nr_run_hysteresis = 2;	/* 0.5 thread */
 static unsigned int nr_run_last;
-#endif
+
+struct runnables_avg_sample {
+	u64 previous_integral;
+	unsigned int avg;
+	bool integral_sampled;
+	u64 prev_timestamp;
+};
+
+static DEFINE_PER_CPU(struct runnables_avg_sample, avg_nr_sample);
+
+static unsigned int get_avg_nr_runnables(void)
+{
+	unsigned int i, sum = 0;
+	struct runnables_avg_sample *sample;
+	u64 integral, old_integral, delta_integral, delta_time, cur_time;
+
+	for_each_online_cpu(i) {
+		sample = &per_cpu(avg_nr_sample, i);
+		integral = nr_running_integral(i);
+		old_integral = sample->previous_integral;
+		sample->previous_integral = integral;
+		cur_time = ktime_to_ns(ktime_get());
+		delta_time = cur_time - sample->prev_timestamp;
+		sample->prev_timestamp = cur_time;
+
+		if (!sample->integral_sampled) {
+			sample->integral_sampled = true;
+			/* First sample to initialize prev_integral, skip
+			 * avg calculation
+			 */
+			continue;
+		}
+
+		if (integral < old_integral) {
+			/* Overflow */
+			delta_integral = (ULLONG_MAX - old_integral) + integral;
+		} else {
+			delta_integral = integral - old_integral;
+		}
+
+		/* Calculate average for the previous sample window */
+		do_div(delta_integral, delta_time);
+		sample->avg = delta_integral;
+		sum += sample->avg;
+	}
+
+	return sum;
+}
 
 static CPU_SPEED_BALANCE balanced_speed_balance(void)
 {
@@ -191,17 +259,15 @@ static CPU_SPEED_BALANCE balanced_speed_balance(void)
 	unsigned long skewed_speed = balanced_speed / 2;
 	unsigned int nr_cpus = num_online_cpus();
 	unsigned int max_cpus = pm_qos_request(PM_QOS_MAX_ONLINE_CPUS) ? : 4;
-#ifdef CONFIG_TEGRA_RUNNABLE_THREAD
-	unsigned int avg_nr_run = avg_nr_running();
+	unsigned int avg_nr_run = get_avg_nr_runnables();
 	unsigned int nr_run;
-#endif
+	unsigned int *current_profile = rt_profiles[rt_profile_sel];
 
 	/* balanced: freq targets for all CPUs are above 50% of highest speed
 	   biased: freq target for at least one CPU is below 50% threshold
 	   skewed: freq targets for at least 2 CPUs are below 25% threshold */
-#ifdef CONFIG_TEGRA_RUNNABLE_THREAD
-	for (nr_run = 1; nr_run < ARRAY_SIZE(nr_run_thresholds); nr_run++) {
-		unsigned int nr_threshold = nr_run_thresholds[nr_run - 1];
+	for (nr_run = 1; nr_run < ARRAY_SIZE(rt_profile_default); nr_run++) {
+		unsigned int nr_threshold = current_profile[nr_run - 1];
 		if (nr_run_last <= nr_run)
 			nr_threshold += nr_run_hysteresis;
 		if (avg_nr_run <= (nr_threshold << (FSHIFT - NR_FSHIFT)))
@@ -211,17 +277,10 @@ static CPU_SPEED_BALANCE balanced_speed_balance(void)
 
 	if (count_slow_cpus(skewed_speed) >= 2 || nr_cpus > max_cpus ||
 		nr_run < nr_cpus)
-#else
-	if (count_slow_cpus(skewed_speed) >= 2 || nr_cpus > max_cpus)
-#endif
 		return CPU_SPEED_SKEWED;
 
-#ifdef CONFIG_TEGRA_RUNNABLE_THREAD
 	if (count_slow_cpus(balanced_speed) >= 1 || nr_cpus == max_cpus ||
 		nr_run <= nr_cpus)
-#else
-	if (count_slow_cpus(balanced_speed) >= 1 || nr_cpus == max_cpus)
-#endif
 		return CPU_SPEED_BIASED;
 
 	return CPU_SPEED_BALANCED;
@@ -231,9 +290,7 @@ static void balanced_work_func(struct work_struct *work)
 {
 	bool up = false;
 	unsigned int cpu = nr_cpu_ids;
-#ifdef CONFIG_TEGRA_RUNNABLE_THREAD
 	unsigned long now = jiffies;
-#endif
 
 	CPU_SPEED_BALANCE balance;
 
@@ -245,11 +302,7 @@ static void balanced_work_func(struct work_struct *work)
 		if (cpu < nr_cpu_ids) {
 			up = false;
 			queue_delayed_work(balanced_wq,
-#ifdef CONFIG_TEGRA_RUNNABLE_THREAD
 						 &balanced_work, up_delay);
-#else
-						 &balanced_work, down_delay);
-#endif
 		} else
 			stop_load_timer();
 		break;
@@ -282,19 +335,15 @@ static void balanced_work_func(struct work_struct *work)
 		       __func__, balanced_state);
 	}
 
-#ifdef CONFIG_TEGRA_RUNNABLE_THREAD
 	if (!up && ((now - last_change_time) < down_delay))
 		cpu = nr_cpu_ids;
-#endif
 
 	if (cpu < nr_cpu_ids) {
-#ifdef CONFIG_TEGRA_RUNNABLE_THREAD
 		last_change_time = now;
-#endif
 		if (up)
-			cpuquiet_wake_cpu(cpu);
+			cpuquiet_wake_cpu(cpu, false);
 		else
-			cpuquiet_quiesence_cpu(cpu);
+			cpuquiet_quiesence_cpu(cpu, false);
 	}
 }
 
@@ -334,11 +383,7 @@ static int balanced_cpufreq_transition(struct notifier_block *nb,
 			if (cpu_freq <= idle_bottom_freq) {
 				balanced_state = DOWN;
 				queue_delayed_work(balanced_wq,
-#ifdef CONFIG_TEGRA_RUNNABLE_THREAD
 					&balanced_work, up_delay);
-#else
-					&balanced_work, down_delay);
-#endif
 				start_load_timer();
 			}
 			break;
@@ -365,12 +410,25 @@ static void delay_callback(struct cpuquiet_attribute *attr)
 	}
 }
 
+static void core_bias_callback (struct cpuquiet_attribute *attr)
+{
+	unsigned long val;
+	if (attr) {
+		val = (*((unsigned int*)(attr->param)));
+		if (val < ARRAY_SIZE(rt_profiles)) {
+			rt_profile_sel = val;
+		}
+		else {	//Revert the change due to invalid range
+			core_bias = rt_profile_sel;
+		}
+	}
+}
+
 CPQ_BASIC_ATTRIBUTE(balance_level, 0644, uint);
 CPQ_BASIC_ATTRIBUTE(idle_bottom_freq, 0644, uint);
 CPQ_BASIC_ATTRIBUTE(idle_top_freq, 0644, uint);
-#ifdef CONFIG_TEGRA_RUNNABLE_THREAD
 CPQ_BASIC_ATTRIBUTE(load_sample_rate, 0644, uint);
-#endif
+CPQ_ATTRIBUTE(core_bias, 0644, uint, core_bias_callback);
 CPQ_ATTRIBUTE(up_delay, 0644, ulong, delay_callback);
 CPQ_ATTRIBUTE(down_delay, 0644, ulong, delay_callback);
 
@@ -380,9 +438,8 @@ static struct attribute *balanced_attributes[] = {
 	&idle_top_freq_attr.attr,
 	&up_delay_attr.attr,
 	&down_delay_attr.attr,
-#ifdef CONFIG_TEGRA_RUNNABLE_THREAD
 	&load_sample_rate_attr.attr,
-#endif
+	&core_bias_attr.attr,
 	NULL,
 };
 
@@ -437,9 +494,7 @@ static int balanced_start(void)
 {
 	int err, count;
 	struct cpufreq_frequency_table *table;
-#ifdef CONFIG_TEGRA_RUNNABLE_THREAD
 	struct cpufreq_freqs initial_freq;
-#endif
 
 	err = balanced_sysfs();
 	if (err)
@@ -452,16 +507,17 @@ static int balanced_start(void)
 
 	INIT_DELAYED_WORK(&balanced_work, balanced_work_func);
 
-#ifdef CONFIG_TEGRA_RUNNABLE_THREAD
 	up_delay = msecs_to_jiffies(100);
-	down_delay = msecs_to_jiffies(500);
-#else
-	up_delay = msecs_to_jiffies(1000);
 	down_delay = msecs_to_jiffies(2000);
-#endif
 
 	table = cpufreq_frequency_get_table(0);
+	if (!table)
+		return -EINVAL;
+
 	for (count = 0; table[count].frequency != CPUFREQ_TABLE_END; count++);
+
+	if (count < 4)
+		return -EINVAL;
 
 	idle_top_freq = table[(count / 2) - 1].frequency;
 	idle_bottom_freq = table[(count / 2) - 2].frequency;
@@ -472,13 +528,11 @@ static int balanced_start(void)
 	init_timer(&load_timer);
 	load_timer.function = calculate_load_timer;
 
-#ifdef CONFIG_TEGRA_RUNNABLE_THREAD
 	/*FIXME: Kick start the state machine by faking a freq notification*/
 	initial_freq.new = cpufreq_get(0);
 	if (initial_freq.new != 0)
 		balanced_cpufreq_transition(NULL, CPUFREQ_RESUMECHANGE,
 						&initial_freq);
-#endif
 	return 0;
 }
 
@@ -500,6 +554,10 @@ static void __exit exit_balanced(void)
 }
 
 MODULE_LICENSE("GPL");
+#ifdef CONFIG_CPUQUIET_DEFAULT_GOV_BALANCED
+fs_initcall(init_balanced);
+#else
 module_init(init_balanced);
+#endif
 module_exit(exit_balanced);
 

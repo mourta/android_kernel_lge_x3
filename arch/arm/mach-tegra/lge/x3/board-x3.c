@@ -196,6 +196,10 @@ static struct tegra_thermal_data thermal_data = {
 	.hysteresis_edp = 3000,
 #endif
 #ifdef CONFIG_TEGRA_THERMAL_THROTTLE
+<<<<<<< HEAD
+=======
+	.temp_throttle = 85000,
+>>>>>>> upstream/cm-11.0
 	.tc1 = 0,
 	.tc2 = 1,
 	.passive_delay = 200,
@@ -504,7 +508,7 @@ static struct lge_battery_platform_data lge_battery_plat = {
 	.gauge_name     = "fuelgauge",
 	.charger_name   = "charger",
 #if (CONFIG_ADC_TSC2007)
-	.adc_name		= "tsc2007_adc",	//                                        
+	.adc_name		= "tsc2007_adc",	//                                   
 #endif	
 };
 

@@ -32,6 +32,7 @@
 #include <linux/memcontrol.h>
 #include <linux/poll.h>
 #include <linux/oom.h>
+#include <linux/export.h>
 
 #include <asm/pgtable.h>
 #include <asm/tlbflush.h>
@@ -602,7 +603,7 @@ void swapcache_free(swp_entry_t entry, struct page *page)
  * This does not give an exact answer when swap count is continued,
  * but does include the high COUNT_CONTINUED flag to allow for that.
  */
-static inline int page_swapcount(struct page *page)
+int page_swapcount(struct page *page)
 {
 	int count = 0;
 	struct swap_info_struct *p;
@@ -1617,7 +1618,7 @@ SYSCALL_DEFINE1(swapoff, const char __user *, specialfile)
 
 	oom_score_adj = test_set_oom_score_adj(OOM_SCORE_ADJ_MAX);
 	err = try_to_unuse(type);
-	test_set_oom_score_adj(oom_score_adj);
+	compare_swap_oom_score_adj(OOM_SCORE_ADJ_MAX, oom_score_adj);
 
 	if (err) {
 		/*
@@ -2297,57 +2298,22 @@ struct swap_info_struct *page_swap_info(struct page *page)
 }
 
 /*
- * swap_lock prevents swap_map being freed. Don't grab an extra
- * reference on the swaphandle, it doesn't matter if it becomes unused.
+ * out-of-line __page_file_ methods to avoid include hell.
  */
-int valid_swaphandles(swp_entry_t entry, unsigned long *offset)
+struct address_space *__page_file_mapping(struct page *page)
 {
-	struct swap_info_struct *si;
-	int our_page_cluster = page_cluster;
-	pgoff_t target, toff;
-	pgoff_t base, end;
-	int nr_pages = 0;
-
-	if (!our_page_cluster)	/* no readahead */
-		return 0;
-
-	si = swap_info[swp_type(entry)];
-	target = swp_offset(entry);
-	base = (target >> our_page_cluster) << our_page_cluster;
-	end = base + (1 << our_page_cluster);
-	if (!base)		/* first page is swap header */
-		base++;
-
-	spin_lock(&swap_lock);
-	if (end > si->max)	/* don't go beyond end of map */
-		end = si->max;
-
-	/* Count contiguous allocated slots above our target */
-	for (toff = target; ++toff < end; nr_pages++) {
-		/* Don't read in free or bad pages */
-		if (!si->swap_map[toff])
-			break;
-		if (swap_count(si->swap_map[toff]) == SWAP_MAP_BAD)
-			break;
-	}
-	/* Count contiguous allocated slots below our target */
-	for (toff = target; --toff >= base; nr_pages++) {
-		/* Don't read in free or bad pages */
-		if (!si->swap_map[toff])
-			break;
-		if (swap_count(si->swap_map[toff]) == SWAP_MAP_BAD)
-			break;
-	}
-	spin_unlock(&swap_lock);
-
-	/*
-	 * Indicate starting offset, and return number of pages to get:
-	 * if only 1, say 0, since there's then no readahead to be done.
-	 */
-	*offset = ++toff;
-	return nr_pages? ++nr_pages: 0;
+	VM_BUG_ON(!PageSwapCache(page));
+	return page_swap_info(page)->swap_file->f_mapping;
 }
+EXPORT_SYMBOL_GPL(__page_file_mapping);
 
+pgoff_t __page_file_index(struct page *page)
+{
+	swp_entry_t swap = { .val = page_private(page) };
+	VM_BUG_ON(!PageSwapCache(page));
+	return swp_offset(swap);
+}
+EXPORT_SYMBOL_GPL(__page_file_index);
 /*
  * add_swap_count_continuation - called when a swap count is duplicated
  * beyond SWAP_MAP_MAX, it allocates a new page and links that to the entry's

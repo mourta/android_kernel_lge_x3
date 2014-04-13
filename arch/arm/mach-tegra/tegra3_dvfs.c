@@ -291,7 +291,10 @@ static struct dvfs core_dvfs_table[] = {
 	CORE_DVFS("3d",     2, 1, KHZ,   200000, 247000, 304000, 361000, 408000,  446000,  484000,  520000,  600000),
 	CORE_DVFS("3d2",    2, 1, KHZ,   200000, 247000, 304000, 361000, 408000,  446000,  484000,  520000,  600000),
 	CORE_DVFS("se",     2, 1, KHZ,   200000, 267000, 304000, 361000, 408000,  446000,  484000,  520000,  600000),
+<<<<<<< HEAD
 
+=======
+>>>>>>> upstream/cm-11.0
 	CORE_DVFS("vde",    3, 1, KHZ,        1,      1,      1,      1,      1,       1,  484000,  484000,  484000),
 	CORE_DVFS("mpe",    3, 1, KHZ,        1,      1,      1,      1,      1,       1,  484000,  484000,  484000),
 	CORE_DVFS("2d",     3, 1, KHZ,        1,      1,      1,      1,      1,       1,  484000,  484000,  484000),
@@ -313,7 +316,10 @@ static struct dvfs core_dvfs_table[] = {
 #endif
 	CORE_DVFS("cbus",   2, 1, KHZ,   200000, 247000, 304000, 352000, 400000,  437000,  484000,  520000,  600000),
 	CORE_DVFS("cbus",   3, 1, KHZ,        1,      1,      1,      1,      1,       1,  484000,  484000,  484000),
+<<<<<<< HEAD
 
+=======
+>>>>>>> upstream/cm-11.0
 	CORE_DVFS("pll_c",  -1, 1, KHZ,  533000, 667000, 667000, 800000, 800000, 1066000, 1066000, 1066000, 1200000),
 
 	/*
@@ -919,7 +925,7 @@ core_cap_state_store(struct kobject *kobj, struct kobj_attribute *attr,
 		if (user_core_cap.refcnt == 1)
 			core_cap_enable(true);
 	} else if (user_core_cap.refcnt) {
-		user_core_cap.refcnt--;
+		user_core_cap.refcnt=0;
 		if (user_core_cap.refcnt == 0)
 			core_cap_enable(false);
 	}
@@ -971,8 +977,12 @@ cbus_cap_state_store(struct kobject *kobj, struct kobj_attribute *attr,
 	if (state) {
 		user_cbus_cap.refcnt++;
 		if (user_cbus_cap.refcnt == 1)
+<<<<<<< HEAD
 			pm_qos_add_request(&user_cbus_cap.request,
 				PM_QOS_CBUS_FREQ_MAX, user_cbus_cap.level);
+=======
+		cbus_cap_update();
+>>>>>>> upstream/cm-11.0
 	} else if (user_cbus_cap.refcnt) {
 		user_cbus_cap.refcnt--;
 		if (user_cbus_cap.refcnt == 0)
